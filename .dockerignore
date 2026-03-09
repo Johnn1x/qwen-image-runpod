@@ -1,0 +1,14 @@
+.DS_Store
+.git
+.github
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache
+.mypy_cache
+.venv
+dist
+build
+output
+

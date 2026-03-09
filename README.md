@@ -12,6 +12,16 @@ This implementation fixes that by:
 - locking the model download path so multiple workers do not race on the shared volume
 - failing early with a clear error if the volume is missing or too small
 
+## Container Image
+
+This repository publishes a public container image to GitHub Container Registry via GitHub Actions.
+
+- Registry: `ghcr.io/textcortex/qwen-image-runpod`
+- Recommended tag style for deployment: immutable `sha-*` tags
+- Convenience tag: `latest`
+
+If you prefer the Docker registry flow in RunPod, use `Import from Docker Registry` and paste the image URL from the package page after the workflow finishes.
+
 ## Model
 
 - Default model: `Qwen/Qwen-Image-2512`
@@ -49,6 +59,12 @@ Recommended starting point:
 - Max workers: `1`
 
 The default `runpod.toml` is intentionally conservative. Once the shared model cache is warm and stable, you can increase worker count.
+
+If you are deploying from Docker Registry instead of GitHub:
+
+- Click `Import from Docker Registry`
+- Use `ghcr.io/textcortex/qwen-image-runpod:latest` for convenience, or a `sha-*` tag for reproducibility
+- Keep the same GPU, disk, volume, and timeout values listed above
 
 ### 3. First cold start
 
