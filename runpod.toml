@@ -1,0 +1,30 @@
+[runpod]
+name = "qwen-image-runpod"
+dockerfile = "Dockerfile"
+
+# Qwen image generation is an 80 GB VRAM class workload.
+gpu_types = [
+  "NVIDIA A100 80GB PCIe",
+  "NVIDIA H100 PCIe",
+  "NVIDIA H100 HBM3",
+  "NVIDIA H100 NVL",
+  "NVIDIA RTX 6000 Ada Generation Blackwell Server Edition",
+  "NVIDIA RTX 6000 Ada Generation Blackwell Workstation Edition",
+  "NVIDIA RTX Pro 6000 Blackwell Max-Q Workstation Edition"
+]
+min_vram_gb = 80
+
+# Keep some headroom on the root filesystem for image layers and runtime overhead.
+container_disk_gb = 20
+
+# The model cache lives here. This is the setting that matters for first cold start.
+volume_gb = 150
+
+# First-time downloads are slow. Give the worker enough time to come up cleanly.
+execution_timeout = 1800
+
+# Conservative default until the shared cache is known-good.
+min_workers = 0
+max_workers = 1
+scale_down_delay = 120
+

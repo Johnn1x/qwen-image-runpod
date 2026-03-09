@@ -1,0 +1,13 @@
+{
+  "input": {
+    "prompt": "A cinematic portrait of a fox astronaut standing on a moon crater, crisp typography saying 'TEXTCORTEX' on the visor reflection",
+    "negative_prompt": "blurry, distorted face, extra limbs, unreadable text",
+    "width": 1024,
+    "height": 1024,
+    "num_inference_steps": 40,
+    "true_cfg_scale": 4.0,
+    "seed": 42,
+    "output_format": "PNG"
+  }
+}
+
