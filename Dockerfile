@@ -6,17 +6,18 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     QWEN_MODEL_ID=Qwen/Qwen-Image-2512 \
-    RUNPOD_VOLUME_PATH=/runpod-volume \
-    HF_HOME=/runpod-volume/huggingface \
-    HF_HUB_CACHE=/runpod-volume/huggingface/hub \
-    HF_ASSETS_CACHE=/runpod-volume/huggingface/assets \
-    HF_XET_CACHE=/runpod-volume/huggingface/xet \
-    TRANSFORMERS_CACHE=/runpod-volume/huggingface/transformers \
-    TMPDIR=/runpod-volume/tmp \
+    MODEL_STORAGE_PATH=/workspace/model-storage \
+    RUNPOD_VOLUME_PATH=/workspace/model-storage \
+    HF_HOME=/workspace/model-storage/huggingface \
+    HF_HUB_CACHE=/workspace/model-storage/huggingface/hub \
+    HF_ASSETS_CACHE=/workspace/model-storage/huggingface/assets \
+    HF_XET_CACHE=/workspace/model-storage/huggingface/xet \
+    TRANSFORMERS_CACHE=/workspace/model-storage/huggingface/transformers \
+    TMPDIR=/workspace/model-storage/tmp \
     HF_XET_CHUNK_CACHE_SIZE_BYTES=0 \
     HF_XET_SHARD_CACHE_SIZE_LIMIT=1073741824 \
     HF_XET_NUM_CONCURRENT_RANGE_GETS=4 \
-    MIN_VOLUME_FREE_GB=100 \
+    MIN_STORAGE_FREE_GB=80 \
     HF_DOWNLOAD_MAX_WORKERS=4 \
     RUNPOD_INIT_TIMEOUT=1800
 
@@ -33,4 +34,3 @@ RUN python3 -m pip install --upgrade pip && \
 COPY handler.py /workspace/handler.py
 
 CMD ["python3", "-u", "handler.py"]
-

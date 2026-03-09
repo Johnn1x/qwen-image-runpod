@@ -6,11 +6,11 @@ This repo exists because the common one-click templates are easy to misconfigure
 
 This implementation fixes that by:
 
-- forcing Hugging Face, Xet, Transformers, and temporary files onto `/runpod-volume`
-- downloading the model snapshot into a stable directory on the network volume before loading it
+- forcing Hugging Face, Xet, Transformers, and temporary files onto container disk under `/workspace/model-storage`
+- downloading the model snapshot into a stable directory on container disk before loading it
 - keeping the extra Xet cache small so downloads do not silently double disk usage
-- locking the model download path so multiple workers do not race on the shared volume
-- failing early with a clear error if the volume is missing or too small
+- locking the model download path so multiple workers do not race on local storage
+- failing early with a clear error if container disk free space is too small
 
 ## Container Image
 
@@ -39,36 +39,27 @@ You can override the model later with `QWEN_MODEL_ID`, but the repo is tuned for
 
 ## RunPod Deployment
 
-### 1. Create a network volume first
-
-Use a network volume in the same region as the worker.
-
-- Recommended size: `150 GB`
-- Minimum practical free space target: `100 GB`
-
-This repo assumes the volume is mounted at `/runpod-volume`.
-
-### 2. Create a serverless endpoint from this repo
+### 1. Create a serverless endpoint from this repo
 
 Recommended starting point:
 
 - GPU: `A100 80GB` or `H100 80GB`
-- Container disk: `20 GB`
-- Network volume: `150 GB`
+- Container disk: `150 GB`
 - Execution timeout: `1800 seconds`
+- Min workers: `1`
 - Max workers: `1`
 
-The default `runpod.toml` is intentionally conservative. Once the shared model cache is warm and stable, you can increase worker count.
+The default `runpod.toml` is intentionally conservative. Without a network volume, each brand-new worker has to download the model again, so keeping one worker warm is the safest default.
 
 If you are deploying from Docker Registry instead of GitHub:
 
 - Click `Import from Docker Registry`
 - Use `ghcr.io/textcortex/qwen-image-runpod:latest` for convenience, or a `sha-*` tag for reproducibility
-- Keep the same GPU, disk, volume, and timeout values listed above
+- Keep the same GPU, container disk, and timeout values listed above
 
-### 3. First cold start
+### 2. First cold start
 
-The first request downloads the model to the network volume. That can take a while. After the cache is warm, subsequent cold starts should reuse the downloaded snapshot.
+The first request downloads the model to container disk. That can take a while. Subsequent requests on the same warm worker reuse the downloaded snapshot.
 
 This image also sets `RUNPOD_INIT_TIMEOUT=1800` so large cold starts have room to finish.
 
@@ -77,8 +68,9 @@ This image also sets `RUNPOD_INIT_TIMEOUT=1800` so large cold starts have room t
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `QWEN_MODEL_ID` | `Qwen/Qwen-Image-2512` | Hugging Face model ID |
-| `RUNPOD_VOLUME_PATH` | `/runpod-volume` | Mounted shared volume path |
-| `MIN_VOLUME_FREE_GB` | `100` | Fail fast if the volume is too small |
+| `MODEL_STORAGE_PATH` | `/workspace/model-storage` | Container-disk storage root for model and caches |
+| `RUNPOD_VOLUME_PATH` | `/workspace/model-storage` | Backward-compatible alias for storage root |
+| `MIN_STORAGE_FREE_GB` | `80` | Fail fast if free container disk space is too small |
 | `HF_DOWNLOAD_MAX_WORKERS` | `4` | Limits parallel download pressure |
 | `HF_XET_CHUNK_CACHE_SIZE_BYTES` | `0` | Disables the large extra Xet chunk cache |
 | `HF_XET_SHARD_CACHE_SIZE_LIMIT` | `1073741824` | Caps shard cache at 1 GiB |
@@ -134,13 +126,13 @@ The repo includes [`sample-request.json`](./sample-request.json). For the first 
 
 ## Local Notes
 
-If you want to run the code outside RunPod, point `RUNPOD_VOLUME_PATH` at a writable directory with enough free space.
+If you want to run the code outside RunPod, point `MODEL_STORAGE_PATH` at a writable directory with enough free space.
 
 Example:
 
 ```bash
-mkdir -p /tmp/qwen-image-volume
-RUNPOD_VOLUME_PATH=/tmp/qwen-image-volume python3 -u handler.py
+mkdir -p /tmp/qwen-image-storage
+MODEL_STORAGE_PATH=/tmp/qwen-image-storage python3 -u handler.py
 ```
 
 That is only useful for syntax and startup checks unless you also have a suitable GPU.

@@ -1,0 +1,99 @@
+{
+  "title": "Qwen Image 2512 for RunPod",
+  "description": "Text-to-image worker for Qwen/Qwen-Image-2512 with container-disk caching and GHCR deployment.",
+  "type": "serverless",
+  "category": "image",
+  "config": {
+    "runsOn": "GPU",
+    "endpointType": "LB",
+    "containerDiskInGb": 150,
+    "gpuCount": 1,
+    "gpuIds": "AMPERE_80,ADA_80_PRO",
+    "allowedCudaVersions": [
+      "12.8",
+      "12.7",
+      "12.6",
+      "12.5",
+      "12.4"
+    ],
+    "env": [
+      {
+        "key": "QWEN_MODEL_ID",
+        "input": {
+          "type": "huggingface",
+          "name": "Qwen image model",
+          "description": "Hugging Face model ID to load for image generation.",
+          "default": "Qwen/Qwen-Image-2512",
+          "required": true
+        }
+      },
+      {
+        "key": "MODEL_STORAGE_PATH",
+        "input": {
+          "name": "Model storage path",
+          "type": "string",
+          "description": "Container-disk path used for model downloads and runtime caches.",
+          "default": "/workspace/model-storage",
+          "advanced": true
+        }
+      },
+      {
+        "key": "MIN_STORAGE_FREE_GB",
+        "input": {
+          "name": "Minimum free storage",
+          "type": "number",
+          "description": "Minimum free container disk space required before downloading the model.",
+          "default": 80,
+          "min": 60,
+          "max": 500,
+          "advanced": true
+        }
+      },
+      {
+        "key": "HF_DOWNLOAD_MAX_WORKERS",
+        "input": {
+          "name": "Download concurrency",
+          "type": "number",
+          "description": "Parallel Hugging Face download workers.",
+          "default": 4,
+          "min": 1,
+          "max": 8,
+          "advanced": true
+        }
+      },
+      {
+        "key": "HF_XET_CHUNK_CACHE_SIZE_BYTES",
+        "value": "0"
+      },
+      {
+        "key": "HF_XET_SHARD_CACHE_SIZE_LIMIT",
+        "value": "1073741824"
+      },
+      {
+        "key": "RUNPOD_INIT_TIMEOUT",
+        "value": "1800"
+      }
+    ],
+    "presets": [
+      {
+        "name": "A100 80GB",
+        "defaults": {
+          "QWEN_MODEL_ID": "Qwen/Qwen-Image-2512",
+          "MODEL_STORAGE_PATH": "/workspace/model-storage",
+          "MIN_STORAGE_FREE_GB": 80,
+          "HF_DOWNLOAD_MAX_WORKERS": 4
+        }
+      },
+      {
+        "name": "H100 80GB",
+        "defaults": {
+          "QWEN_MODEL_ID": "Qwen/Qwen-Image-2512",
+          "MODEL_STORAGE_PATH": "/workspace/model-storage",
+          "MIN_STORAGE_FREE_GB": 80,
+          "HF_DOWNLOAD_MAX_WORKERS": 6
+        }
+      }
+    ]
+  }
+}
+

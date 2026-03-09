@@ -16,26 +16,26 @@ from typing import Any
 
 
 DEFAULT_MODEL_ID = os.getenv("QWEN_MODEL_ID", "Qwen/Qwen-Image-2512")
-DEFAULT_VOLUME_PATH = Path(os.getenv("RUNPOD_VOLUME_PATH", "/runpod-volume"))
-MIN_VOLUME_FREE_GB = int(os.getenv("MIN_VOLUME_FREE_GB", "100"))
+DEFAULT_STORAGE_PATH = Path(
+    os.getenv(
+        "MODEL_STORAGE_PATH",
+        os.getenv("RUNPOD_VOLUME_PATH", "/workspace/model-storage"),
+    )
+)
+MIN_STORAGE_FREE_GB = int(os.getenv("MIN_STORAGE_FREE_GB", "80"))
 HF_DOWNLOAD_MAX_WORKERS = int(os.getenv("HF_DOWNLOAD_MAX_WORKERS", "4"))
 
 
-def _require_volume_root() -> Path:
-    if DEFAULT_VOLUME_PATH.exists():
-        return DEFAULT_VOLUME_PATH
-
-    raise RuntimeError(
-        "RunPod network volume is missing. Attach a shared volume and mount it at "
-        f"{DEFAULT_VOLUME_PATH} or override RUNPOD_VOLUME_PATH."
-    )
+def _ensure_storage_root() -> Path:
+    DEFAULT_STORAGE_PATH.mkdir(parents=True, exist_ok=True)
+    return DEFAULT_STORAGE_PATH
 
 
-VOLUME_ROOT = _require_volume_root()
-HF_ROOT = VOLUME_ROOT / "huggingface"
-MODEL_ROOT = VOLUME_ROOT / "models"
-LOCK_ROOT = VOLUME_ROOT / "locks"
-TMP_ROOT = VOLUME_ROOT / "tmp"
+STORAGE_ROOT = _ensure_storage_root()
+HF_ROOT = STORAGE_ROOT / "huggingface"
+MODEL_ROOT = STORAGE_ROOT / "models"
+LOCK_ROOT = STORAGE_ROOT / "locks"
+TMP_ROOT = STORAGE_ROOT / "tmp"
 
 
 def _configure_storage_environment() -> None:
@@ -102,7 +102,7 @@ def _require_minimum_free_space(path: Path, min_free_gb: int) -> None:
     if free_gb < min_free_gb:
         raise RuntimeError(
             f"Insufficient free space on {path}. Found {free_gb:.1f} GiB free, "
-            f"require at least {min_free_gb} GiB. Increase the RunPod network volume."
+            f"require at least {min_free_gb} GiB. Increase the RunPod container disk size."
         )
 
 
@@ -134,8 +134,8 @@ def _download_model_snapshot(model_id: str) -> Path:
             LOGGER.info("Using cached model snapshot from %s", local_dir)
             return local_dir
 
-        _require_minimum_free_space(VOLUME_ROOT, MIN_VOLUME_FREE_GB)
-        LOGGER.info("Volume before download: %s", _disk_report(VOLUME_ROOT))
+        _require_minimum_free_space(STORAGE_ROOT, MIN_STORAGE_FREE_GB)
+        LOGGER.info("Storage before download: %s", _disk_report(STORAGE_ROOT))
         LOGGER.info("Downloading %s into %s", model_id, local_dir)
 
         snapshot_download(
@@ -147,11 +147,11 @@ def _download_model_snapshot(model_id: str) -> Path:
 
         if not model_index.exists():
             raise RuntimeError(
-                f"Model download finished but {model_index} is missing. Check the volume contents."
+                f"Model download finished but {model_index} is missing. Check the storage directory contents."
             )
 
         ready_marker.touch()
-        LOGGER.info("Volume after download: %s", _disk_report(VOLUME_ROOT))
+        LOGGER.info("Storage after download: %s", _disk_report(STORAGE_ROOT))
         return local_dir
 
 
@@ -307,6 +307,6 @@ def generate_image(job: dict[str, Any]) -> dict[str, Any]:
 
 
 if __name__ == "__main__":
-    LOGGER.info("Worker starting with volume: %s", VOLUME_ROOT)
-    LOGGER.info("Volume status: %s", _disk_report(VOLUME_ROOT))
+    LOGGER.info("Worker starting with storage root: %s", STORAGE_ROOT)
+    LOGGER.info("Storage status: %s", _disk_report(STORAGE_ROOT))
     runpod.serverless.start({"handler": generate_image})

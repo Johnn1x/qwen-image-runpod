@@ -1,0 +1,59 @@
+{
+  "tests": [
+    {
+      "name": "basic-image-generation",
+      "input": {
+        "prompt": "A minimalist illustration of a red fox reading a book in a sunlit library",
+        "negative_prompt": "blurry, malformed, extra limbs",
+        "width": 512,
+        "height": 512,
+        "num_inference_steps": 4,
+        "true_cfg_scale": 4.0,
+        "seed": 7,
+        "output_format": "JPEG"
+      },
+      "timeout": 1800000
+    }
+  ],
+  "config": {
+    "gpuTypeId": "NVIDIA A100 80GB PCIe",
+    "gpuCount": 1,
+    "env": [
+      {
+        "key": "QWEN_MODEL_ID",
+        "value": "Qwen/Qwen-Image-2512"
+      },
+      {
+        "key": "MODEL_STORAGE_PATH",
+        "value": "/workspace/model-storage"
+      },
+      {
+        "key": "MIN_STORAGE_FREE_GB",
+        "value": "80"
+      },
+      {
+        "key": "HF_DOWNLOAD_MAX_WORKERS",
+        "value": "4"
+      },
+      {
+        "key": "HF_XET_CHUNK_CACHE_SIZE_BYTES",
+        "value": "0"
+      },
+      {
+        "key": "HF_XET_SHARD_CACHE_SIZE_LIMIT",
+        "value": "1073741824"
+      },
+      {
+        "key": "RUNPOD_INIT_TIMEOUT",
+        "value": "1800"
+      }
+    ],
+    "allowedCudaVersions": [
+      "12.8",
+      "12.7",
+      "12.6",
+      "12.5",
+      "12.4"
+    ]
+  }
+}
