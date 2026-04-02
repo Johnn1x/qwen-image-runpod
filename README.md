@@ -1,5 +1,5 @@
 # qwen-image-runpod
-
+.
 Open-source RunPod serverless worker for the latest Qwen image model, `Qwen/Qwen-Image-2512`.
 
 This repo exists because the common one-click templates are easy to misconfigure for large Hugging Face models. The failure mode is usually the one you hit: the model download spills onto the container filesystem and dies with `No space left on device` before the first request finishes.
