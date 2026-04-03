@@ -1,6 +1,5 @@
 FROM nvidia/cuda:12.8.1-cudnn-runtime-ubuntu24.04
 
-# Убираем вопросы при установке пакетов
 ARG DEBIAN_FRONTEND=noninteractive
 ENV TZ=Etc/UTC
 
@@ -15,17 +14,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     && rm -rf /var/lib/apt/lists/*
 
-# === Создаём виртуальное окружение (рекомендуемый способ) ===
+# === Виртуальное окружение (решает проблему с системным pip) ===
 RUN python3 -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
 # Обновляем pip внутри venv
 RUN pip install --upgrade pip setuptools wheel
 
-# Установка PyTorch (CUDA 12.8)
+# Установка PyTorch
 RUN pip install --no-cache-dir torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
 
-# === Пути к модели (как ты хотел — /workspace/model-storage) ===
+# Пути к модели
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
@@ -47,12 +46,12 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     HF_DOWNLOAD_MAX_WORKERS=4 \
     RUNPOD_INIT_TIMEOUT=1800
 
-# Создаём папки для кэша
+# Создаём директории для кэша
 RUN mkdir -p /workspace/model-storage/huggingface /workspace/model-storage/tmp
 
 COPY requirements.txt /workspace/requirements.txt
 
-# Установка всех зависимостей в venv
+# Установка зависимостей
 RUN pip install --no-cache-dir -r /workspace/requirements.txt
 
 COPY handler.py /workspace/handler.py
