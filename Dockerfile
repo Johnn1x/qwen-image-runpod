@@ -11,11 +11,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     && rm -rf /var/lib/apt/lists/*
 
-# Установка PyTorch с CUDA 12.8
-RUN python3 -m pip install --upgrade pip && \
-    python3 -m pip install --no-cache-dir torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
+# Установка PyTorch с CUDA 12.8 + --break-system-packages
+RUN python3 -m pip install --upgrade pip --break-system-packages && \
+    python3 -m pip install --no-cache-dir --break-system-packages \
+      torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
 
-# === Пути возвращены в /workspace/model-storage (как ты просил) ===
+# === Пути к кэшу (как ты просил — /workspace/model-storage) ===
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
@@ -41,7 +42,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 RUN mkdir -p /workspace/model-storage/huggingface /workspace/model-storage/tmp
 
 COPY requirements.txt /workspace/requirements.txt
-RUN python3 -m pip install --no-cache-dir -r /workspace/requirements.txt
+
+# Установка requirements с --break-system-packages
+RUN python3 -m pip install --no-cache-dir --break-system-packages -r /workspace/requirements.txt
 
 COPY handler.py /workspace/handler.py
 
