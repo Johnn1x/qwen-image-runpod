@@ -2,7 +2,7 @@ FROM nvidia/cuda:12.8.1-cudnn-runtime-ubuntu24.04
 
 WORKDIR /workspace
 
-# Установка Python и необходимых пакетов
+# Установка базовых пакетов
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \
     python3-pip \
@@ -11,12 +11,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     && rm -rf /var/lib/apt/lists/*
 
-# Установка PyTorch с CUDA 12.8 + --break-system-packages
-RUN python3 -m pip install --upgrade pip --break-system-packages && \
-    python3 -m pip install --no-cache-dir --break-system-packages \
-      torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
+# === Создаём и активируем виртуальное окружение ===
+RUN python3 -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
 
-# === Пути к кэшу (как ты просил — /workspace/model-storage) ===
+# Обновляем pip и устанавливаем PyTorch
+RUN pip install --upgrade pip setuptools wheel
+
+RUN pip install --no-cache-dir torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
+
+# === Пути к модели (как ты просил — /workspace/model-storage) ===
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
@@ -43,8 +47,8 @@ RUN mkdir -p /workspace/model-storage/huggingface /workspace/model-storage/tmp
 
 COPY requirements.txt /workspace/requirements.txt
 
-# Установка requirements с --break-system-packages
-RUN python3 -m pip install --no-cache-dir --break-system-packages -r /workspace/requirements.txt
+# Установка зависимостей в venv
+RUN pip install --no-cache-dir -r /workspace/requirements.txt
 
 COPY handler.py /workspace/handler.py
 
