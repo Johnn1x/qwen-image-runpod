@@ -1,5 +1,4 @@
 from __future__ import annotations
-
 import base64
 import fcntl
 import io
@@ -14,8 +13,12 @@ from pathlib import Path
 from threading import Lock
 from typing import Any
 
+# ==================== НАСТРОЙКИ ДЛЯ ВАШЕЙ LIGHTNING-МОДЕЛИ ====================
+DEFAULT_BASE_MODEL_ID = os.getenv("QWEN_MODEL_ID", "Qwen/Qwen-Image-Edit-2511")
+LORA_REPO_ID = os.getenv("LORA_REPO_ID", "lightx2v/Qwen-Image-Edit-2511-Lightning")
+LORA_WEIGHT_NAME = os.getenv("LORA_WEIGHT_NAME", "Qwen-Image-Edit-2511-Lightning-8steps-V1.0-fp32.safetensors")
+# =============================================================================
 
-DEFAULT_MODEL_ID = os.getenv("QWEN_MODEL_ID", "Qwen/Qwen-Image-2512")
 DEFAULT_STORAGE_PATH = Path(
     os.getenv(
         "MODEL_STORAGE_PATH",
@@ -25,18 +28,15 @@ DEFAULT_STORAGE_PATH = Path(
 MIN_STORAGE_FREE_GB = int(os.getenv("MIN_STORAGE_FREE_GB", "80"))
 HF_DOWNLOAD_MAX_WORKERS = int(os.getenv("HF_DOWNLOAD_MAX_WORKERS", "4"))
 
-
 def _ensure_storage_root() -> Path:
     DEFAULT_STORAGE_PATH.mkdir(parents=True, exist_ok=True)
     return DEFAULT_STORAGE_PATH
-
 
 STORAGE_ROOT = _ensure_storage_root()
 HF_ROOT = STORAGE_ROOT / "huggingface"
 MODEL_ROOT = STORAGE_ROOT / "models"
 LOCK_ROOT = STORAGE_ROOT / "locks"
 TMP_ROOT = STORAGE_ROOT / "tmp"
-
 
 def _configure_storage_environment() -> None:
     directories = {
@@ -47,22 +47,17 @@ def _configure_storage_environment() -> None:
         "TRANSFORMERS_CACHE": HF_ROOT / "transformers",
         "TMPDIR": TMP_ROOT,
     }
-
     for env_name, path in directories.items():
         path.mkdir(parents=True, exist_ok=True)
         os.environ[env_name] = str(path)
-
     MODEL_ROOT.mkdir(parents=True, exist_ok=True)
     LOCK_ROOT.mkdir(parents=True, exist_ok=True)
-
     os.environ.setdefault("HF_XET_CHUNK_CACHE_SIZE_BYTES", "0")
     os.environ.setdefault("HF_XET_SHARD_CACHE_SIZE_LIMIT", str(1024**3))
     os.environ.setdefault("HF_XET_NUM_CONCURRENT_RANGE_GETS", "4")
     os.environ.setdefault("HF_HUB_DISABLE_TELEMETRY", "1")
     os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
-
     tempfile.tempdir = str(TMP_ROOT)
-
 
 _configure_storage_environment()
 
@@ -71,7 +66,6 @@ import torch
 from diffusers import DiffusionPipeline
 from huggingface_hub import snapshot_download
 from PIL import Image
-
 
 logging.basicConfig(
     level=os.getenv("LOG_LEVEL", "INFO"),
@@ -82,19 +76,15 @@ LOGGER = logging.getLogger("qwen-image-runpod")
 pipeline: DiffusionPipeline | None = None
 pipeline_lock = Lock()
 
-
 class UserInputError(ValueError):
     pass
-
 
 def _format_gib(num_bytes: int) -> str:
     return f"{num_bytes / (1024**3):.1f} GiB"
 
-
 def _disk_report(path: Path) -> str:
     total, used, free = shutil.disk_usage(path)
     return f"free={_format_gib(free)} total={_format_gib(total)} path={path}"
-
 
 def _require_minimum_free_space(path: Path, min_free_gb: int) -> None:
     free_bytes = shutil.disk_usage(path).free
@@ -105,10 +95,8 @@ def _require_minimum_free_space(path: Path, min_free_gb: int) -> None:
             f"require at least {min_free_gb} GiB. Increase the RunPod container disk size."
         )
 
-
 def _model_dir(model_id: str) -> Path:
     return MODEL_ROOT / model_id.replace("/", "--")
-
 
 @contextmanager
 def _exclusive_lock(lock_path: Path):
@@ -121,43 +109,30 @@ def _exclusive_lock(lock_path: Path):
         finally:
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
-
 def _download_model_snapshot(model_id: str) -> Path:
     local_dir = _model_dir(model_id)
     lock_path = LOCK_ROOT / f"{local_dir.name}.lock"
     force_sync = os.getenv("FORCE_MODEL_SYNC", "0") == "1"
-
     with _exclusive_lock(lock_path):
         ready_marker = local_dir / ".snapshot-complete"
-        model_index = local_dir / "model_index.json"
-        if ready_marker.exists() and model_index.exists() and not force_sync:
+        if ready_marker.exists() and not force_sync:
             LOGGER.info("Using cached model snapshot from %s", local_dir)
             return local_dir
-
         _require_minimum_free_space(STORAGE_ROOT, MIN_STORAGE_FREE_GB)
         LOGGER.info("Storage before download: %s", _disk_report(STORAGE_ROOT))
         LOGGER.info("Downloading %s into %s", model_id, local_dir)
-
         snapshot_download(
             repo_id=model_id,
             local_dir=str(local_dir),
             max_workers=HF_DOWNLOAD_MAX_WORKERS,
             token=os.getenv("HF_TOKEN") or None,
         )
-
-        if not model_index.exists():
-            raise RuntimeError(
-                f"Model download finished but {model_index} is missing. Check the storage directory contents."
-            )
-
         ready_marker.touch()
         LOGGER.info("Storage after download: %s", _disk_report(STORAGE_ROOT))
         return local_dir
 
-
 def _load_pipeline() -> DiffusionPipeline:
     global pipeline
-
     if pipeline is not None:
         return pipeline
 
@@ -168,15 +143,23 @@ def _load_pipeline() -> DiffusionPipeline:
         if not torch.cuda.is_available():
             raise RuntimeError("A CUDA GPU is required for Qwen image generation.")
 
-        model_dir = _download_model_snapshot(DEFAULT_MODEL_ID)
-        torch_dtype = torch.bfloat16
+        # 1. Скачиваем базовую модель
+        base_dir = _download_model_snapshot(DEFAULT_BASE_MODEL_ID)
+        # 2. Скачиваем Lightning LoRA
+        lora_dir = _download_model_snapshot(LORA_REPO_ID)
 
-        LOGGER.info("Loading pipeline from %s", model_dir)
+        LOGGER.info("Loading base pipeline from %s", base_dir)
         loaded_pipeline = DiffusionPipeline.from_pretrained(
-            str(model_dir),
-            torch_dtype=torch_dtype,
+            str(base_dir),
+            torch_dtype=torch.bfloat16,
             local_files_only=True,
             use_safetensors=True,
+        )
+
+        LOGGER.info("Loading Lightning LoRA: %s / %s", lora_dir, LORA_WEIGHT_NAME)
+        loaded_pipeline.load_lora_weights(
+            str(lora_dir),
+            weight_name=LORA_WEIGHT_NAME,
         )
 
         loaded_pipeline = loaded_pipeline.to("cuda")
@@ -186,21 +169,18 @@ def _load_pipeline() -> DiffusionPipeline:
             loaded_pipeline.vae.enable_tiling()
 
         pipeline = loaded_pipeline
-        LOGGER.info("Model loaded on %s", torch.cuda.get_device_name(0))
+        LOGGER.info("✅ Lightning-модель успешно загружена на %s", torch.cuda.get_device_name(0))
         return pipeline
 
-
+# ==================== ОСТАЛЬНОЙ КОД БЕЗ ИЗМЕНЕНИЙ ====================
 def _parse_int(name: str, value: Any, *, minimum: int | None = None) -> int:
     try:
         parsed = int(value)
     except (TypeError, ValueError) as exc:
         raise UserInputError(f"{name} must be an integer") from exc
-
     if minimum is not None and parsed < minimum:
         raise UserInputError(f"{name} must be >= {minimum}")
-
     return parsed
-
 
 def _parse_dimension(name: str, value: Any) -> int:
     parsed = _parse_int(name, value, minimum=16)
@@ -208,24 +188,19 @@ def _parse_dimension(name: str, value: Any) -> int:
         raise UserInputError(f"{name} must be a positive multiple of 16")
     return parsed
 
-
 def _parse_float(name: str, value: Any, *, minimum: float | None = None) -> float:
     try:
         parsed = float(value)
     except (TypeError, ValueError) as exc:
         raise UserInputError(f"{name} must be a number") from exc
-
     if minimum is not None and parsed < minimum:
         raise UserInputError(f"{name} must be >= {minimum}")
-
     return parsed
-
 
 def _build_seed(value: Any) -> int:
     if value is None:
         return secrets.randbelow(2**31 - 1)
     return _parse_int("seed", value, minimum=0)
-
 
 def _image_to_base64(image: Image.Image, output_format: str) -> str:
     buffer = io.BytesIO()
@@ -233,10 +208,8 @@ def _image_to_base64(image: Image.Image, output_format: str) -> str:
     if output_format == "JPEG":
         image = image.convert("RGB")
         save_kwargs["quality"] = 95
-
     image.save(buffer, format=output_format, **save_kwargs)
     return base64.b64encode(buffer.getvalue()).decode("utf-8")
-
 
 def generate_image(job: dict[str, Any]) -> dict[str, Any]:
     try:
@@ -253,12 +226,12 @@ def generate_image(job: dict[str, Any]) -> dict[str, Any]:
         height = _parse_dimension("height", job_input.get("height", 1024))
         num_inference_steps = _parse_int(
             "num_inference_steps",
-            job_input.get("num_inference_steps", 40),
+            job_input.get("num_inference_steps", 8),   # Lightning = 4–8 шагов
             minimum=1,
         )
         true_cfg_scale = _parse_float(
             "true_cfg_scale",
-            job_input.get("true_cfg_scale", job_input.get("cfg_scale", 4.0)),
+            job_input.get("true_cfg_scale", job_input.get("cfg_scale", 1.0)),  # Lightning обычно 1.0
             minimum=0.0,
         )
         seed = _build_seed(job_input.get("seed"))
@@ -278,6 +251,7 @@ def generate_image(job: dict[str, Any]) -> dict[str, Any]:
         )
 
         pipe = _load_pipeline()
+
         start_time = time.perf_counter()
         generator = torch.Generator(device="cuda").manual_seed(seed)
 
@@ -298,13 +272,12 @@ def generate_image(job: dict[str, Any]) -> dict[str, Any]:
         return {
             "image": encoded_image,
             "seed": seed,
-            "model_id": DEFAULT_MODEL_ID,
+            "model_id": f"{DEFAULT_BASE_MODEL_ID} + {LORA_WEIGHT_NAME}",
             "output_format": output_format.lower(),
             "latency_seconds": round(latency_seconds, 2),
         }
     except UserInputError as exc:
         return {"error": str(exc)}
-
 
 if __name__ == "__main__":
     LOGGER.info("Worker starting with storage root: %s", STORAGE_ROOT)
