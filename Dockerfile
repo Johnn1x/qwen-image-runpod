@@ -1,8 +1,12 @@
 FROM nvidia/cuda:12.8.1-cudnn-runtime-ubuntu24.04
 
+# Убираем вопросы tzdata при установке
+ARG DEBIAN_FRONTEND=noninteractive
+ENV TZ=Etc/UTC
+
 WORKDIR /workspace
 
-# Установка базовых пакетов
+# Установка базовых пакетов + venv
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \
     python3-pip \
@@ -15,9 +19,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN python3 -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
-# Обновляем pip и устанавливаем PyTorch
+# Обновляем pip внутри venv
 RUN pip install --upgrade pip setuptools wheel
 
+# Установка PyTorch
 RUN pip install --no-cache-dir torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
 
 # === Пути к модели (как ты просил — /workspace/model-storage) ===
