@@ -14,7 +14,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     && rm -rf /var/lib/apt/lists/*
 
-# === Создаём виртуальное окружение (это решает проблему с pip) ===
+# === Создаём виртуальное окружение (решает проблему с pip) ===
 RUN python3 -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
