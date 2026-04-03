@@ -5,7 +5,10 @@ WORKDIR /workspace
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
-    QWEN_MODEL_ID=Qwen/Qwen-Image-2512 \
+    # === Основные настройки для Lightning ===
+    QWEN_MODEL_ID=Qwen/Qwen-Image-Edit-2511 \
+    LORA_REPO_ID=lightx2v/Qwen-Image-Edit-2511-Lightning \
+    LORA_WEIGHT_NAME=Qwen-Image-Edit-2511-Lightning-8steps-V1.0-fp32.safetensors \
     MODEL_STORAGE_PATH=/workspace/model-storage \
     RUNPOD_VOLUME_PATH=/workspace/model-storage \
     HF_HOME=/workspace/model-storage/huggingface \
@@ -27,7 +30,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt /workspace/requirements.txt
-
 RUN python3 -m pip install --upgrade pip && \
     python3 -m pip install --no-cache-dir -r /workspace/requirements.txt
 
