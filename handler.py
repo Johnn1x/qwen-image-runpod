@@ -20,7 +20,7 @@ from diffusers import DiffusionPipeline
 from huggingface_hub import snapshot_download
 from PIL import Image
 
-# ==================== НАСТРОЙКИ (взяты из вашего оригинала) ====================
+# ==================== НАСТРОЙКИ ====================
 DEFAULT_BASE_MODEL_ID = os.getenv("QWEN_MODEL_ID", "Qwen/Qwen-Image-Edit-2511")
 LORA_REPO_ID = os.getenv("LORA_REPO_ID", "lightx2v/Qwen-Image-Edit-2511-Lightning")
 LORA_WEIGHT_NAME = os.getenv("LORA_WEIGHT_NAME", "Qwen-Image-Edit-2511-Lightning-8steps-V1.0-fp32.safetensors")
@@ -31,7 +31,7 @@ DEFAULT_STORAGE_PATH = Path(
 MIN_STORAGE_FREE_GB = int(os.getenv("MIN_STORAGE_FREE_GB", "80"))
 HF_DOWNLOAD_MAX_WORKERS = int(os.getenv("HF_DOWNLOAD_MAX_WORKERS", "4"))
 
-# ==================== STORAGE SETUP (полностью ваш код) ====================
+# ==================== STORAGE SETUP ====================
 def _ensure_storage_root() -> Path:
     DEFAULT_STORAGE_PATH.mkdir(parents=True, exist_ok=True)
     return DEFAULT_STORAGE_PATH
@@ -65,7 +65,7 @@ def _configure_storage_environment() -> None:
 
 _configure_storage_environment()
 
-# ==================== ЛОГИРОВАНИЕ И ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ ====================
+# ==================== ЛОГИРОВАНИЕ ====================
 logging.basicConfig(
     level=os.getenv("LOG_LEVEL", "INFO"),
     format="%(asctime)s %(levelname)s %(message)s",
@@ -75,70 +75,96 @@ LOGGER = logging.getLogger("qwen-image-runpod")
 pipeline: DiffusionPipeline | None = None
 pipeline_lock = Lock()
 
-# ==================== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ (ваши, без изменений) ====================
-# ... (все функции _format_gib, _disk_report, _require_minimum_free_space, _model_dir,
-# _exclusive_lock, _download_model_snapshot, _load_pipeline, _parse_int, _parse_dimension,
-# _parse_float, _build_seed — я их полностью сохранил, они идентичны вашему оригиналу)
+# ==================== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ====================
+def _format_gib(size_bytes: int) -> str:
+    return f"{size_bytes / (1024**3):.2f} GiB"
 
-# (чтобы не загромождать ответ, вставьте сюда все ваши вспомогательные функции из старого handler.py — они остаются 1-в-1)
+def _disk_report(path: Path) -> str:
+    usage = shutil.disk_usage(path)
+    return (
+        f"total={_format_gib(usage.total)} | "
+        f"used={_format_gib(usage.used)} | "
+        f"free={_format_gib(usage.free)}"
+    )
 
-def _image_to_base64(image: Image.Image, output_format: str) -> str:
-    buffer = io.BytesIO()
-    save_kwargs: dict[str, Any] = {}
-    if output_format == "JPEG":
-        image = image.convert("RGB")
-        save_kwargs["quality"] = 95
-    image.save(buffer, format=output_format, **save_kwargs)
-    return base64.b64encode(buffer.getvalue()).decode("utf-8")
+def _require_minimum_free_space(path: Path) -> None:
+    usage = shutil.disk_usage(path)
+    free_gb = usage.free / (1024**3)
+    if free_gb < MIN_STORAGE_FREE_GB:
+        raise RuntimeError(
+            f"Недостаточно места на диске: {free_gb:.1f} GiB свободно, "
+            f"требуется минимум {MIN_STORAGE_FREE_GB} GiB"
+        )
 
-# ==================== LIFESPAN (загрузка модели при старте) ====================
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    LOGGER.info("Worker starting with storage root: %s", STORAGE_ROOT)
-    LOGGER.info("Storage status: %s", _disk_report(STORAGE_ROOT))
+def _model_dir(model_id: str) -> Path:
+    safe_name = model_id.replace("/", "__")
+    return MODEL_ROOT / safe_name
+
+def _exclusive_lock(lock_path: Path):
+    lock_file = open(lock_path, "w")
+    fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+    return lock_file
+
+def _download_model_snapshot(repo_id: str, local_dir: Path) -> None:
+    _require_minimum_free_space(STORAGE_ROOT)
+    lock_path = LOCK_ROOT / f"{repo_id.replace('/', '__')}.lock"
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
     
-    # Загружаем модель сразу при старте
+    with _exclusive_lock(lock_path):
+        if (local_dir / "model_index.json").exists():
+            LOGGER.info(f"Модель {repo_id} уже скачана")
+            return
+        LOGGER.info(f"Скачиваем {repo_id} ...")
+        snapshot_download(
+            repo_id=repo_id,
+            local_dir=str(local_dir),
+            local_dir_use_symlinks=False,
+            resume_download=True,
+            max_workers=HF_DOWNLOAD_MAX_WORKERS,
+        )
+        LOGGER.info(f"Скачивание {repo_id} завершено")
+
+def _load_pipeline() -> DiffusionPipeline:
     global pipeline
-    pipeline = _load_pipeline()  # теперь не лениво
-    
-    yield
-    LOGGER.info("Shutting down...")
+    with pipeline_lock:
+        if pipeline is not None:
+            return pipeline
 
-# ==================== FASTAPI ПРИЛОЖЕНИЕ ====================
-app = FastAPI(lifespan=lifespan)
+        base_dir = _model_dir(DEFAULT_BASE_MODEL_ID)
+        _download_model_snapshot(DEFAULT_BASE_MODEL_ID, base_dir)
 
-@app.get("/ping")
-async def ping():
-    """RunPod Load Balancer health-check"""
-    if pipeline is None:
-        return JSONResponse(status_code=204)  # ещё инициализируется
-    return {"status": "healthy"}
+        LOGGER.info("Загружаем DiffusionPipeline...")
+        pipe = DiffusionPipeline.from_pretrained(
+            str(base_dir),
+            torch_dtype=torch.bfloat16,
+            device_map="balanced",
+        )
 
-@app.post("/generate")  # или @app.post("/") — как удобнее
-async def generate(request: Request):
-    job = await request.json()
+        # LoRA
+        lora_dir = _model_dir(LORA_REPO_ID)
+        _download_model_snapshot(LORA_REPO_ID, lora_dir)
+        pipe.load_lora_weights(str(lora_dir), weight_name=LORA_WEIGHT_NAME)
+        pipe.fuse_lora()
+
+        pipe.to("cuda")
+        pipeline = pipe
+        LOGGER.info("Модель полностью загружена и готова")
+        return pipeline
+
+def _parse_int(val: Any, default: int) -> int:
     try:
-        # ==================== ВАШ ИНФЕРЕНС-КОД (полностью сохранён) ====================
-        job_input = job.get("input") or {}
-        # ... (весь код из вашей функции generate_image без изменений)
-        # prompt, negative_prompt, width, height, num_inference_steps и т.д.
-        # pipe = pipeline  # теперь уже загружена
-        # result = pipe(...)
-        # encoded_image = _image_to_base64(...)
-        
-        # Возвращаем точно такой же формат ответа, как раньше
-        return {
-            "image": encoded_image,
-            "seed": seed,
-            "model_id": f"{DEFAULT_BASE_MODEL_ID} + {LORA_WEIGHT_NAME}",
-            "output_format": output_format.lower(),
-            "latency_seconds": round(latency_seconds, 2),
-        }
-    except Exception as exc:
-        LOGGER.error("Error: %s", exc)
-        raise HTTPException(status_code=400, detail=str(exc))
+        return int(val)
+    except (TypeError, ValueError):
+        return default
 
-if __name__ == "__main__":
-    import uvicorn
-    port = int(os.getenv("PORT", 80))
-    uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")
+def _parse_dimension(val: Any, default: int = 1024) -> int:
+    v = _parse_int(val, default)
+    return max(256, min(2048, v // 8 * 8))
+
+def _parse_float(val: Any, default: float) -> float:
+    try:
+        return float(val)
+    except (TypeError, ValueError):
+        return default
+
+def _build_seed(seed: Any)
