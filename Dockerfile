@@ -14,14 +14,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     && rm -rf /var/lib/apt/lists/*
 
-# === Создаём виртуальное окружение (решает проблему с pip) ===
+# === Виртуальное окружение ===
 RUN python3 -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
-# Обновляем pip внутри venv
 RUN pip install --upgrade pip setuptools wheel
-
-# Установка PyTorch
 RUN pip install --no-cache-dir torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
 
 # Пути к модели
@@ -44,16 +41,14 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     HF_XET_NUM_CONCURRENT_RANGE_GETS=4 \
     MIN_STORAGE_FREE_GB=80 \
     HF_DOWNLOAD_MAX_WORKERS=4 \
-    RUNPOD_INIT_TIMEOUT=1800
+    RUNPOD_INIT_TIMEOUT=3600
 
-# Создаём директории для кэша
 RUN mkdir -p /workspace/model-storage/huggingface /workspace/model-storage/tmp
 
 COPY requirements.txt /workspace/requirements.txt
-
-# Установка зависимостей
 RUN pip install --no-cache-dir -r /workspace/requirements.txt
 
 COPY handler.py /workspace/handler.py
 
-CMD ["python3", "-u", "handler.py"]
+# === ИСПРАВЛЕНИЕ: явно запускаем из venv ===
+CMD ["/opt/venv/bin/python", "-u", "handler.py"]
