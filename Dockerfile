@@ -59,4 +59,4 @@ RUN pip install --no-cache-dir -r /workspace/requirements.txt
 
 COPY handler.py /workspace/handler.py
 
-CMD ["/opt/venv/bin/python", "-u", "handler.py"]
+CMD ["python", "-u", "handler.py"]
