@@ -24,8 +24,8 @@ LORA_WEIGHT_NAME = os.getenv("LORA_WEIGHT_NAME", "Qwen-Image-Edit-2511-Lightning
 DEFAULT_STORAGE_PATH = Path(
     os.getenv("MODEL_STORAGE_PATH", os.getenv("RUNPOD_VOLUME_PATH", "/workspace/model-storage"))
 )
+MIN_STORAGE_FREE_GB = int(os.getenv("MIN_STORAGE_FREE_GB", "30"))   # ← изменено
 
-# ==================== STORAGE SETUP (оставил как было) ====================
 STORAGE_ROOT = DEFAULT_STORAGE_PATH
 STORAGE_ROOT.mkdir(parents=True, exist_ok=True)
 
@@ -36,9 +36,9 @@ logging.basicConfig(
 LOGGER = logging.getLogger("qwen-image-runpod")
 
 pipeline: DiffusionPipeline | None = None
-pipeline_lock = Lock()
+pipeline_lock = Lock()   # один lock на всю загрузку
 
-# ==================== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ (все ваши, без изменений) ====================
+# ==================== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ====================
 def _format_gib(size_bytes: int) -> str:
     return f"{size_bytes / (1024**3):.2f} GiB"
 
@@ -51,8 +51,8 @@ def _require_minimum_free_space(path: Path) -> None:
     import shutil
     usage = shutil.disk_usage(path)
     free_gb = usage.free / (1024**3)
-    if free_gb < 80:
-        raise RuntimeError(f"Недостаточно места: {free_gb:.1f} GiB свободно")
+    if free_gb < MIN_STORAGE_FREE_GB:
+        raise RuntimeError(f"Недостаточно места: {free_gb:.1f} GiB свободно (требуется минимум {MIN_STORAGE_FREE_GB})")
 
 def _model_dir(model_id: str) -> Path:
     safe_name = model_id.replace("/", "__")
@@ -85,7 +85,7 @@ def _download_model_snapshot(repo_id: str, local_dir: Path) -> None:
 
 def _load_pipeline() -> DiffusionPipeline:
     global pipeline
-    with pipeline_lock:
+    with pipeline_lock:                     # ← единственный lock
         if pipeline is not None:
             return pipeline
         base_dir = _model_dir(DEFAULT_BASE_MODEL_ID)
@@ -95,13 +95,12 @@ def _load_pipeline() -> DiffusionPipeline:
         pipe = DiffusionPipeline.from_pretrained(
             str(base_dir),
             torch_dtype=torch.bfloat16,
-            device_map="balanced",
         )
         lora_dir = _model_dir(LORA_REPO_ID)
         _download_model_snapshot(LORA_REPO_ID, lora_dir)
         pipe.load_lora_weights(str(lora_dir), weight_name=LORA_WEIGHT_NAME)
         pipe.fuse_lora()
-        pipe.to("cuda")
+        pipe.to("cuda")                     # ← упрощено
         pipeline = pipe
         LOGGER.info("Модель загружена")
         return pipeline
@@ -134,7 +133,7 @@ def _image_to_base64(image: Image.Image, output_format: str) -> str:
     image.save(buffer, format=output_format, quality=95 if output_format == "JPEG" else None)
     return base64.b64encode(buffer.getvalue()).decode("utf-8")
 
-# ==================== LIFESPAN (упрощённый, без загрузки модели) ====================
+# ==================== LIFESPAN ====================
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     LOGGER.info("=== WORKER STARTED SUCCESSFULLY ===")
@@ -146,54 +145,60 @@ app = FastAPI(lifespan=lifespan)
 
 @app.get("/ping")
 async def ping():
-    return {"status": "healthy"}   # всегда 200, т.к. модель грузится лениво
+    return {"status": "healthy"}
 
+# ==================== /generate ====================
 @app.post("/generate")
 async def generate(request: Request):
-    global pipeline
     job = await request.json()
+    job_input = job.get("input") or {}
+
+    image_b64 = job_input.get("image")
+    if not image_b64:
+        raise HTTPException(status_code=400, detail="Поле 'image' (base64) обязательно")
+
     try:
-        # Ленивая загрузка модели только при первом запросе
-        with pipeline_lock:
-            if pipeline is None:
-                pipeline = _load_pipeline()
+        image_data = base64.b64decode(image_b64)
+        input_image = Image.open(io.BytesIO(image_data)).convert("RGB")
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Неверный base64 изображения: {e}")
 
-        # ==================== ВАШ ИНФЕРЕНС ====================
-        job_input = job.get("input") or {}
-        prompt = job_input.get("prompt", "")
-        negative_prompt = job_input.get("negative_prompt", "")
-        width = _parse_dimension(job_input.get("width"), 1024)
-        height = _parse_dimension(job_input.get("height"), 1024)
-        num_inference_steps = _parse_int(job_input.get("num_inference_steps"), 8)
-        guidance_scale = _parse_float(job_input.get("guidance_scale"), 7.5)
-        output_format = job_input.get("output_format", "PNG").upper()
-        seed = _build_seed(job_input.get("seed"))
+    prompt = job_input.get("prompt", "")
+    negative_prompt = job_input.get("negative_prompt", "")
+    width = _parse_dimension(job_input.get("width"), 1024)
+    height = _parse_dimension(job_input.get("height"), 1024)
+    num_inference_steps = _parse_int(job_input.get("num_inference_steps"), 8)
+    guidance_scale = _parse_float(job_input.get("guidance_scale"), 7.5)
+    output_format = job_input.get("output_format", "PNG").upper()
+    seed = _build_seed(job_input.get("seed"))
 
-        start_time = time.time()
-        generator = torch.Generator("cuda").manual_seed(seed)
-        result = pipeline(
-            prompt=prompt,
-            negative_prompt=negative_prompt,
-            width=width,
-            height=height,
-            num_inference_steps=num_inference_steps,
-            guidance_scale=guidance_scale,
-            generator=generator,
-        ).images[0]
+    if pipeline is None:
+        pipeline = _load_pipeline()          # ← без внешнего lock
 
-        encoded_image = _image_to_base64(result, output_format)
-        latency = time.time() - start_time
+    start_time = time.time()
+    generator = torch.Generator("cuda").manual_seed(seed)
 
-        return {
-            "image": encoded_image,
-            "seed": seed,
-            "model_id": f"{DEFAULT_BASE_MODEL_ID} + {LORA_WEIGHT_NAME}",
-            "output_format": output_format.lower(),
-            "latency_seconds": round(latency, 2),
-        }
-    except Exception as exc:
-        LOGGER.error("Ошибка: %s", exc)
-        raise HTTPException(status_code=400, detail=str(exc))
+    result = pipeline(
+        image=[input_image],
+        prompt=prompt,
+        negative_prompt=negative_prompt,
+        width=width,
+        height=height,
+        num_inference_steps=num_inference_steps,
+        guidance_scale=guidance_scale,
+        generator=generator,
+    ).images[0]
+
+    encoded_image = _image_to_base64(result, output_format)
+    latency = time.time() - start_time
+
+    return {
+        "image": encoded_image,
+        "seed": seed,
+        "model_id": f"{DEFAULT_BASE_MODEL_ID} + {LORA_WEIGHT_NAME}",
+        "output_format": output_format.lower(),
+        "latency_seconds": round(latency, 2),
+    }
 
 if __name__ == "__main__":
     import uvicorn
