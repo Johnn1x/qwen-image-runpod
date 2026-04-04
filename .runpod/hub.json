@@ -8,7 +8,6 @@
     "endpointType": "LB",
     "containerDiskInGb": 150,
     "gpuCount": 1,
-    "gpuIds": "AMPERE_80,ADA_80_PRO",
     "allowedCudaVersions": [
       "12.8",
       "12.7",
