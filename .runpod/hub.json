@@ -1,6 +1,6 @@
 {
-  "title": "Qwen Image 2512 for RunPod",
-  "description": "Text-to-image worker for Qwen/Qwen-Image-2512 with container-disk caching and GHCR deployment.",
+  "title": "Qwen Image Edit Lightning",
+  "description": "Serverless worker для lightx2v/Qwen-Image-Edit-2511-Lightning. Работает на ЛЮБЫХ GPU (RTX 4090, RTX 5090, A100, A6000, L40S, 3090 и т.д.). GPU Type выбирайте сами в настройках Endpoint — ограничений нет.",
   "type": "serverless",
   "category": "image",
   "config": {
@@ -19,10 +19,30 @@
       {
         "key": "QWEN_MODEL_ID",
         "input": {
-          "type": "huggingface",
-          "name": "Qwen image model",
-          "description": "Hugging Face model ID to load for image generation.",
-          "default": "Qwen/Qwen-Image-2512",
+          "type": "string",
+          "name": "Base model ID",
+          "description": "Базовая модель",
+          "default": "Qwen/Qwen-Image-Edit-2511",
+          "required": true
+        }
+      },
+      {
+        "key": "LORA_REPO_ID",
+        "input": {
+          "type": "string",
+          "name": "LoRA repo ID",
+          "description": "Lightning LoRA репозиторий",
+          "default": "lightx2v/Qwen-Image-Edit-2511-Lightning",
+          "required": true
+        }
+      },
+      {
+        "key": "LORA_WEIGHT_NAME",
+        "input": {
+          "type": "string",
+          "name": "LoRA weight name",
+          "description": "Имя .safetensors файла",
+          "default": "Qwen-Image-Edit-2511-Lightning-8steps-V1.0-fp32.safetensors",
           "required": true
         }
       },
@@ -31,7 +51,7 @@
         "input": {
           "name": "Model storage path",
           "type": "string",
-          "description": "Container-disk path used for model downloads and runtime caches.",
+          "description": "Путь для кэша моделей",
           "default": "/workspace/model-storage",
           "advanced": true
         }
@@ -41,7 +61,7 @@
         "input": {
           "name": "Minimum free storage",
           "type": "number",
-          "description": "Minimum free container disk space required before downloading the model.",
+          "description": "Минимально свободного места на диске",
           "default": 80,
           "min": 60,
           "max": 500,
@@ -53,7 +73,7 @@
         "input": {
           "name": "Download concurrency",
           "type": "number",
-          "description": "Parallel Hugging Face download workers.",
+          "description": "Количество потоков скачивания",
           "default": 4,
           "min": 1,
           "max": 8,
@@ -75,24 +95,15 @@
     ],
     "presets": [
       {
-        "name": "A100 80GB",
+        "name": "Any GPU (24GB+)",
         "defaults": {
-          "QWEN_MODEL_ID": "Qwen/Qwen-Image-2512",
+          "QWEN_MODEL_ID": "Qwen/Qwen-Image-Edit-2511",
+          "LORA_REPO_ID": "lightx2v/Qwen-Image-Edit-2511-Lightning",
+          "LORA_WEIGHT_NAME": "Qwen-Image-Edit-2511-Lightning-8steps-V1.0-fp32.safetensors",
           "MODEL_STORAGE_PATH": "/workspace/model-storage",
-          "MIN_STORAGE_FREE_GB": 80,
-          "HF_DOWNLOAD_MAX_WORKERS": 4
-        }
-      },
-      {
-        "name": "H100 80GB",
-        "defaults": {
-          "QWEN_MODEL_ID": "Qwen/Qwen-Image-2512",
-          "MODEL_STORAGE_PATH": "/workspace/model-storage",
-          "MIN_STORAGE_FREE_GB": 80,
-          "HF_DOWNLOAD_MAX_WORKERS": 6
+          "MIN_STORAGE_FREE_GB": 80
         }
       }
     ]
   }
 }
-
