@@ -13,34 +13,63 @@ from pathlib import Path
 from threading import Lock
 from typing import Any
 
+import torch
+from diffusers import QwenImageEditPlusPipeline          # ← ИСПРАВЛЕНО
+from PIL import Image
+import runpod
+
+# ====================== НАСТРОЙКИ ======================
 DEFAULT_MODEL_ID = os.getenv("QWEN_MODEL_ID", "Qwen/Qwen-Image-Edit-2511")
 LORA_REPO = "lightx2v/Qwen-Image-Edit-2511-Lightning"
 LORA_WEIGHT = "Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors"
 
-# ... (весь код до _load_pipeline остаётся без изменений)
+STORAGE_ROOT = Path(os.getenv("MODEL_STORAGE_PATH", "/workspace/model-storage"))
+STORAGE_ROOT.mkdir(parents=True, exist_ok=True)
 
-def _load_pipeline() -> DiffusionPipeline:
+LOGGER = logging.getLogger("runpod")
+LOGGER.setLevel(logging.INFO)
+logging.basicConfig(level=logging.INFO)
+
+pipeline: QwenImageEditPlusPipeline | None = None
+pipeline_lock = Lock()
+
+
+def _download_model_snapshot(model_id: str) -> Path:
+    from huggingface_hub import snapshot_download
+    model_dir = STORAGE_ROOT / "models" / model_id.replace("/", "--")
+    if not model_dir.exists():
+        LOGGER.info("Downloading model %s...", model_id)
+        snapshot_download(
+            repo_id=model_id,
+            local_dir=str(model_dir),
+            local_dir_use_symlinks=False,
+            resume_download=True,
+        )
+    return model_dir
+
+
+def _load_pipeline() -> QwenImageEditPlusPipeline:
     global pipeline
     if pipeline is not None:
         return pipeline
+
     with pipeline_lock:
         if pipeline is not None:
             return pipeline
 
         model_dir = _download_model_snapshot(DEFAULT_MODEL_ID)
-        torch_dtype = torch.bfloat16
 
         LOGGER.info("Loading base pipeline from %s", model_dir)
-        loaded_pipeline = DiffusionPipeline.from_pretrained(
+        loaded_pipeline = QwenImageEditPlusPipeline.from_pretrained(   # ← ИСПРАВЛЕНО
             str(model_dir),
-            torch_dtype=torch_dtype,
+            torch_dtype=torch.bfloat16,
             local_files_only=True,
             use_safetensors=True,
         )
         loaded_pipeline = loaded_pipeline.to("cuda")
         loaded_pipeline.set_progress_bar_config(disable=True)
 
-        # ← Загружаем вашу LoRA
+        # Загружаем Lightning LoRA
         LOGGER.info("Loading Lightning LoRA: %s / %s", LORA_REPO, LORA_WEIGHT)
         loaded_pipeline.load_lora_weights(
             LORA_REPO,
@@ -56,38 +85,92 @@ def _load_pipeline() -> DiffusionPipeline:
         LOGGER.info("Model + LoRA loaded on %s", torch.cuda.get_device_name(0))
         return pipeline
 
-# ... (весь остальной код до generate_image остаётся)
+
+def _base64_to_image(b64: str) -> Image.Image:
+    if b64.startswith("data:image"):
+        b64 = b64.split(",", 1)[1]
+    return Image.open(io.BytesIO(base64.b64decode(b64)))
+
+
+def _image_to_base64(image: Image.Image, fmt: str = "PNG") -> str:
+    buffer = io.BytesIO()
+    image.save(buffer, format=fmt.upper())
+    return base64.b64encode(buffer.getvalue()).decode("utf-8")
+
+
+def _parse_dimension(name: str, value: Any) -> int:
+    try:
+        v = int(value)
+        if v < 64 or v > 2048 or v % 8 != 0:
+            raise ValueError
+        return v
+    except Exception:
+        raise ValueError(f"Неверное значение {name}: {value}")
+
+
+def _parse_int(name: str, value: Any, minimum: int = 1) -> int:
+    try:
+        v = int(value)
+        return max(minimum, v)
+    except Exception:
+        return minimum
+
+
+def _parse_float(name: str, value: Any, minimum: float = 0.0) -> float:
+    try:
+        v = float(value)
+        return max(minimum, v)
+    except Exception:
+        return minimum
+
+
+class UserInputError(Exception):
+    pass
+
 
 def generate_image(job: dict[str, Any]) -> dict[str, Any]:
     try:
         job_input = job.get("input") or {}
+
+        # ← ОБЯЗАТЕЛЬНОЕ входное изображение
+        image_b64 = job_input.get("image")
+        if not image_b64:
+            return {"error": "Параметр 'image' (base64) обязателен"}
+
+        image = _base64_to_image(image_b64)
+
         prompt = str(job_input.get("prompt", "")).strip()
         negative_prompt = str(job_input.get("negative_prompt", "")).strip()
+
         width = _parse_dimension("width", job_input.get("width", 1024))
         height = _parse_dimension("height", job_input.get("height", 1024))
+
         num_inference_steps = _parse_int("num_inference_steps", job_input.get("num_inference_steps", 4), minimum=1)
-        strength = _parse_float("strength", job_input.get("strength", 0.8), minimum=0.1)  # для минимального изменения окружения
-        true_cfg_scale = 1.0  # для Lightning обязательно
+        strength = _parse_float("strength", job_input.get("strength", 0.8), minimum=0.1)
 
-        # ... (seed, output_format и т.д. как было)
+        seed = int(job_input.get("seed", secrets.randbelow(2**32)))
+        output_format = str(job_input.get("output_format", "PNG")).upper()
 
-        LOGGER.info("Job %s | steps=%s | strength=%.2f", job.get("id"), num_inference_steps, strength)
+        LOGGER.info("Job %s | steps=%s | strength=%.2f | image=%dx%d", 
+                    job.get("id"), num_inference_steps, strength, image.width, image.height)
 
         pipe = _load_pipeline()
-        start_time = time.perf_counter()
 
+        start_time = time.perf_counter()
         generator = torch.Generator(device="cuda").manual_seed(seed)
 
         with torch.inference_mode():
             result = pipe(
+                image=image,                          # ← ОБЯЗАТЕЛЬНО
                 prompt=prompt,
                 negative_prompt=negative_prompt or None,
                 width=width,
                 height=height,
                 num_inference_steps=num_inference_steps,
                 strength=strength,
-                true_cfg_scale=true_cfg_scale,
+                true_cfg_scale=1.0,                   # ← обязательно для Lightning
                 generator=generator,
+                num_images_per_prompt=1,
             )
 
         latency_seconds = time.perf_counter() - start_time
@@ -100,8 +183,13 @@ def generate_image(job: dict[str, Any]) -> dict[str, Any]:
             "output_format": output_format.lower(),
             "latency_seconds": round(latency_seconds, 2),
         }
+
     except UserInputError as exc:
         return {"error": str(exc)}
+    except Exception as exc:
+        LOGGER.exception("Unexpected error")
+        return {"error": f"Internal error: {str(exc)}"}
+
 
 if __name__ == "__main__":
     LOGGER.info("Worker starting with storage root: %s", STORAGE_ROOT)
