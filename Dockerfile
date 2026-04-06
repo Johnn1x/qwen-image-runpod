@@ -4,7 +4,7 @@ WORKDIR /workspace
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
-    QWEN_MODEL_ID=Qwen/Qwen-Image-Edit-2511 \          # ← ИСПРАВЛЕНО
+    QWEN_MODEL_ID=Qwen/Qwen-Image-Edit-2511 \
     MODEL_STORAGE_PATH=/workspace/model-storage \
     RUNPOD_VOLUME_PATH=/workspace/model-storage \
     HF_HOME=/workspace/model-storage/huggingface \
