@@ -18,7 +18,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     HF_XET_NUM_CONCURRENT_RANGE_GETS=4 \
     MIN_STORAGE_FREE_GB=80 \
     HF_DOWNLOAD_MAX_WORKERS=4 \
-    RUNPOD_INIT_TIMEOUT=1800
+    RUNPOD_INIT_TIMEOUT=3600
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
