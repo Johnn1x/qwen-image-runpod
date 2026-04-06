@@ -1,20 +1,16 @@
 from __future__ import annotations
 import base64
-import fcntl
 import io
 import logging
 import os
 import secrets
-import shutil
-import tempfile
 import time
-from contextlib import contextmanager
 from pathlib import Path
 from threading import Lock
 from typing import Any
 
 import torch
-from diffusers import QwenImageEditPlusPipeline          # ← ИСПРАВЛЕНО
+from diffusers import QwenImageEditPlusPipeline
 from PIL import Image
 import runpod
 
@@ -60,7 +56,7 @@ def _load_pipeline() -> QwenImageEditPlusPipeline:
         model_dir = _download_model_snapshot(DEFAULT_MODEL_ID)
 
         LOGGER.info("Loading base pipeline from %s", model_dir)
-        loaded_pipeline = QwenImageEditPlusPipeline.from_pretrained(   # ← ИСПРАВЛЕНО
+        loaded_pipeline = QwenImageEditPlusPipeline.from_pretrained(
             str(model_dir),
             torch_dtype=torch.bfloat16,
             local_files_only=True,
@@ -69,7 +65,6 @@ def _load_pipeline() -> QwenImageEditPlusPipeline:
         loaded_pipeline = loaded_pipeline.to("cuda")
         loaded_pipeline.set_progress_bar_config(disable=True)
 
-        # Загружаем Lightning LoRA
         LOGGER.info("Loading Lightning LoRA: %s / %s", LORA_REPO, LORA_WEIGHT)
         loaded_pipeline.load_lora_weights(
             LORA_REPO,
@@ -124,15 +119,10 @@ def _parse_float(name: str, value: Any, minimum: float = 0.0) -> float:
         return minimum
 
 
-class UserInputError(Exception):
-    pass
-
-
 def generate_image(job: dict[str, Any]) -> dict[str, Any]:
     try:
         job_input = job.get("input") or {}
 
-        # ← ОБЯЗАТЕЛЬНОЕ входное изображение
         image_b64 = job_input.get("image")
         if not image_b64:
             return {"error": "Параметр 'image' (base64) обязателен"}
@@ -161,14 +151,14 @@ def generate_image(job: dict[str, Any]) -> dict[str, Any]:
 
         with torch.inference_mode():
             result = pipe(
-                image=image,                          # ← ОБЯЗАТЕЛЬНО
+                image=image,
                 prompt=prompt,
                 negative_prompt=negative_prompt or None,
                 width=width,
                 height=height,
                 num_inference_steps=num_inference_steps,
                 strength=strength,
-                true_cfg_scale=1.0,                   # ← обязательно для Lightning
+                true_cfg_scale=1.0,
                 generator=generator,
                 num_images_per_prompt=1,
             )
@@ -184,13 +174,19 @@ def generate_image(job: dict[str, Any]) -> dict[str, Any]:
             "latency_seconds": round(latency_seconds, 2),
         }
 
-    except UserInputError as exc:
-        return {"error": str(exc)}
     except Exception as exc:
-        LOGGER.exception("Unexpected error")
+        LOGGER.exception("Error in generate_image")
         return {"error": f"Internal error: {str(exc)}"}
 
 
 if __name__ == "__main__":
     LOGGER.info("Worker starting with storage root: %s", STORAGE_ROOT)
+    
+    LOGGER.info("Preloading model + LoRA (this may take 5-15 minutes first time)...")
+    try:
+        _load_pipeline()
+        LOGGER.info("Model preloaded successfully and ready for requests.")
+    except Exception as e:
+        LOGGER.error("Failed to preload model: %s", e)
+
     runpod.serverless.start({"handler": generate_image})
