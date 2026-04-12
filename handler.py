@@ -17,7 +17,7 @@ import runpod
 # ====================== НАСТРОЙКИ ======================
 DEFAULT_MODEL_ID = os.getenv("QWEN_MODEL_ID", "Qwen/Qwen-Image-Edit-2511")
 LORA_REPO = "lightx2v/Qwen-Image-Edit-2511-Lightning"
-LORA_WEIGHT = "Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors"
+LORA_WEIGHT = "Qwen-Image-Edit-2511-Lightning-8steps-V1.0-bf16.safetensors"
 
 STORAGE_ROOT = Path(os.getenv("MODEL_STORAGE_PATH", "/workspace/model-storage"))
 STORAGE_ROOT.mkdir(parents=True, exist_ok=True)
@@ -64,6 +64,8 @@ def _load_pipeline() -> QwenImageEditPlusPipeline:
         )
         loaded_pipeline = loaded_pipeline.to("cuda")
         loaded_pipeline.set_progress_bar_config(disable=True)
+
+        loaded_pipeline.enable_model_cpu_offload()
 
         LOGGER.info("Loading Lightning LoRA: %s / %s", LORA_REPO, LORA_WEIGHT)
         loaded_pipeline.load_lora_weights(
@@ -145,6 +147,9 @@ def generate_image(job: dict[str, Any]) -> dict[str, Any]:
                     job.get("id"), num_inference_steps, strength, image.width, image.height)
 
         pipe = _load_pipeline()
+
+        torch.cuda.empty_cache()
+        torch.cuda.reset_peak_memory_stats()
 
         start_time = time.perf_counter()
         generator = torch.Generator(device="cuda").manual_seed(seed)
