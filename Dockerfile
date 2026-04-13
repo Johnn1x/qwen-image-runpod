@@ -20,10 +20,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     MIN_STORAGE_FREE_GB=80 \
     HF_DOWNLOAD_MAX_WORKERS=4 \
     RUNPOD_INIT_TIMEOUT=3600 \
-    PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True   # ← добавил (решает OOM)
-
-# Добавил для RTX 6000 Ada (чуть быстрее)
-ENV TORCH_CUDA_ARCH_LIST="8.9"
+    PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
+    TORCH_CUDA_ARCH_LIST=8.9
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
