@@ -39,7 +39,7 @@ def _load_pipeline() -> QwenImageEditPlusPipeline:
         loaded_pipeline = QwenImageEditPlusPipeline.from_pretrained(
             DEFAULT_MODEL_ID,
             torch_dtype=torch.bfloat16,
-            local_files_only=True,
+            local_files_only=False,
             use_safetensors=True,
         )
 
