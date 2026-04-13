@@ -16,7 +16,7 @@ import runpod
 # ====================== НАСТРОЙКИ ======================
 DEFAULT_MODEL_ID = os.getenv("QWEN_MODEL_ID", "Qwen/Qwen-Image-Edit-2511")
 LORA_REPO = "lightx2v/Qwen-Image-Edit-2511-Lightning"
-LORA_WEIGHT = "qwen_image_edit_2511_fp8_e4m3fn_scaled_lightning_8steps_v1.0.safetensors"   # ← FP8 fused
+LORA_WEIGHT = "Qwen-Image-Edit-2511-Lightning-8steps-V1.0-bf16.safetensors"
 
 STORAGE_ROOT = Path(os.getenv("MODEL_STORAGE_PATH", "/workspace/model-storage"))
 STORAGE_ROOT.mkdir(parents=True, exist_ok=True)
@@ -28,19 +28,26 @@ logging.basicConfig(level=logging.INFO)
 pipeline: QwenImageEditPlusPipeline | None = None
 pipeline_lock = Lock()
 
+
 def _download_model_snapshot(model_id: str) -> Path:
     from huggingface_hub import snapshot_download
     model_dir = STORAGE_ROOT / "models" / model_id.replace("/", "--")
     if not model_dir.exists():
         LOGGER.info("Downloading model %s...", model_id)
-        snapshot_download(repo_id=model_id, local_dir=str(model_dir),
-                          local_dir_use_symlinks=False, resume_download=True)
+        snapshot_download(
+            repo_id=model_id,
+            local_dir=str(model_dir),
+            local_dir_use_symlinks=False,
+            resume_download=True,
+        )
     return model_dir
+
 
 def _load_pipeline() -> QwenImageEditPlusPipeline:
     global pipeline
     if pipeline is not None:
         return pipeline
+
     with pipeline_lock:
         if pipeline is not None:
             return pipeline
@@ -50,7 +57,7 @@ def _load_pipeline() -> QwenImageEditPlusPipeline:
 
         loaded_pipeline = QwenImageEditPlusPipeline.from_pretrained(
             str(model_dir),
-            torch_dtype=torch.float8_e4m3fn,          # ← важно для FP8
+            torch_dtype=torch.bfloat16,
             local_files_only=True,
             use_safetensors=True,
         )
@@ -58,8 +65,12 @@ def _load_pipeline() -> QwenImageEditPlusPipeline:
         loaded_pipeline = loaded_pipeline.to("cuda")
         loaded_pipeline.set_progress_bar_config(disable=True)
 
-        LOGGER.info("Loading FP8 Lightning LoRA: %s / %s", LORA_REPO, LORA_WEIGHT)
-        loaded_pipeline.load_lora_weights(LORA_REPO, weight_name=LORA_WEIGHT, adapter_name="lightning")
+        LOGGER.info("Loading Lightning LoRA: %s / %s", LORA_REPO, LORA_WEIGHT)
+        loaded_pipeline.load_lora_weights(
+            LORA_REPO,
+            weight_name=LORA_WEIGHT,
+            adapter_name="lightning"
+        )
         loaded_pipeline.set_adapters(["lightning"], adapter_weights=[1.0])
 
         if getattr(loaded_pipeline, "vae", None) is not None:
@@ -69,16 +80,56 @@ def _load_pipeline() -> QwenImageEditPlusPipeline:
         LOGGER.info("Model + LoRA loaded on %s", torch.cuda.get_device_name(0))
         return pipeline
 
-# ====================== generate_image (без изменений) ======================
+
+def _base64_to_image(b64: str) -> Image.Image:
+    if b64.startswith("data:image"):
+        b64 = b64.split(",", 1)[1]
+    return Image.open(io.BytesIO(base64.b64decode(b64))).convert("RGB")
+
+
+def _image_to_base64(image: Image.Image, fmt: str = "PNG") -> str:
+    buffer = io.BytesIO()
+    image.save(buffer, format=fmt.upper())
+    return base64.b64encode(buffer.getvalue()).decode("utf-8")
+
+
+def _parse_dimension(name: str, value: Any) -> int:
+    try:
+        v = int(value)
+        if v < 64 or v > 2048 or v % 8 != 0:
+            raise ValueError
+        return v
+    except Exception:
+        raise ValueError(f"Неверное значение {name}: {value}")
+
+
+def _parse_int(name: str, value: Any, minimum: int = 1) -> int:
+    try:
+        v = int(value)
+        return max(minimum, v)
+    except Exception:
+        return minimum
+
+
+def _parse_float(name: str, value: Any, minimum: float = 0.0) -> float:
+    try:
+        v = float(value)
+        return max(minimum, v)
+    except Exception:
+        return minimum
+
+
 def generate_image(job: dict[str, Any]) -> dict[str, Any]:
     try:
         job_input = job.get("input") or {}
         image_b64 = job_input.get("image")
 
+        # Health check от RunPod
         if not image_b64:
             LOGGER.info("Health check request received. Returning ready status.")
             return {"status": "ready"}
 
+        # Основная обработка
         image = _base64_to_image(image_b64)
         prompt = str(job_input.get("prompt", "")).strip()
         negative_prompt = str(job_input.get("negative_prompt", "")).strip()
@@ -89,7 +140,8 @@ def generate_image(job: dict[str, Any]) -> dict[str, Any]:
         seed = int(job_input.get("seed", secrets.randbelow(2**32)))
         output_format = str(job_input.get("output_format", "PNG")).upper()
 
-        LOGGER.info("Job %s | steps=%s | image=%dx%d", job.get("id"), num_inference_steps, image.width, image.height)
+        LOGGER.info("Job %s | steps=%s | strength=%.2f | size=%dx%d",
+                    job.get("id"), num_inference_steps, strength, width, height)
 
         pipe = _load_pipeline()
 
@@ -128,9 +180,8 @@ def generate_image(job: dict[str, Any]) -> dict[str, Any]:
         LOGGER.exception("Error in generate_image")
         return {"error": f"Internal error: {str(exc)}"}
 
-# (все вспомогательные функции _base64_to_image, _parse_dimension и т.д. оставь как были в предыдущей версии)
 
 if __name__ == "__main__":
     LOGGER.info("Worker starting with storage root: %s", STORAGE_ROOT)
-    LOGGER.info("Lazy loading + FP8 enabled.")
+    LOGGER.info("Lazy loading enabled — model will load on first request.")
     runpod.serverless.start({"handler": generate_image})
