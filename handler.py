@@ -1,11 +1,11 @@
 from __future__ import annotations
 import base64
 import io
-import inspect
 import logging
 import os
 import secrets
 import time
+from threading import Lock                  # ← Вот эта строка была пропущена
 from typing import Any
 import torch
 from diffusers import QwenImageEditPlusPipeline
@@ -22,7 +22,7 @@ LOGGER.setLevel(logging.INFO)
 logging.basicConfig(level=logging.INFO)
 
 pipeline: QwenImageEditPlusPipeline | None = None
-pipeline_lock = Lock()
+pipeline_lock = Lock()                      # ← теперь определён
 
 
 def _load_pipeline() -> QwenImageEditPlusPipeline:
@@ -35,10 +35,11 @@ def _load_pipeline() -> QwenImageEditPlusPipeline:
             return pipeline
 
         LOGGER.info("Loading base pipeline from RunPod Model Cache: %s", DEFAULT_MODEL_ID)
+
         loaded_pipeline = QwenImageEditPlusPipeline.from_pretrained(
             DEFAULT_MODEL_ID,
             torch_dtype=torch.bfloat16,
-            local_files_only=True,      # ← важно для Model Cache
+            local_files_only=True,      # важно для Model Cache
             use_safetensors=True,
         )
 
@@ -150,7 +151,9 @@ def generate_image(job: dict[str, Any]) -> dict[str, Any]:
 
 if __name__ == "__main__":
     LOGGER.info("Worker starting...")
-    LOGGER.info("Pre-loading model + LoRA at worker startup (RunPod Model Cache)...")
-    _load_pipeline()                                   # ← модель грузится сразу при старте
+    LOGGER.info("Pre-loading model + LoRA at worker startup (RunPod Model Cache mode)...")
+    
+    _load_pipeline()                    # ← грузим сразу при старте worker
+    
     LOGGER.info("Model pre-loaded successfully. Starting Serverless handler.")
     runpod.serverless.start({"handler": generate_image})
