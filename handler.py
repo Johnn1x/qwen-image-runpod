@@ -8,7 +8,6 @@ import time
 from pathlib import Path
 from threading import Lock
 from typing import Any
-
 import torch
 from diffusers import QwenImageEditPlusPipeline
 from PIL import Image
@@ -54,18 +53,20 @@ def _load_pipeline() -> QwenImageEditPlusPipeline:
             return pipeline
 
         model_dir = _download_model_snapshot(DEFAULT_MODEL_ID)
-
         LOGGER.info("Loading base pipeline from %s", model_dir)
+
         loaded_pipeline = QwenImageEditPlusPipeline.from_pretrained(
             str(model_dir),
             torch_dtype=torch.bfloat16,
             local_files_only=True,
             use_safetensors=True,
         )
+
         loaded_pipeline = loaded_pipeline.to("cuda")
         loaded_pipeline.set_progress_bar_config(disable=True)
 
-        loaded_pipeline.enable_model_cpu_offload()
+        # Убрали enable_model_cpu_offload() — на RTX 6000 Ada 48 ГБ он сильно тормозит
+        # Теперь модель полностью на GPU — скорость вернётся к 10–30 секундам
 
         LOGGER.info("Loading Lightning LoRA: %s / %s", LORA_REPO, LORA_WEIGHT)
         loaded_pipeline.load_lora_weights(
@@ -124,30 +125,26 @@ def _parse_float(name: str, value: Any, minimum: float = 0.0) -> float:
 def generate_image(job: dict[str, Any]) -> dict[str, Any]:
     try:
         job_input = job.get("input") or {}
-
         image_b64 = job_input.get("image")
         if not image_b64:
             return {"error": "Параметр 'image' (base64) обязателен"}
 
         image = _base64_to_image(image_b64)
-
         prompt = str(job_input.get("prompt", "")).strip()
         negative_prompt = str(job_input.get("negative_prompt", "")).strip()
-
         width = _parse_dimension("width", job_input.get("width", 1024))
         height = _parse_dimension("height", job_input.get("height", 1024))
-
-        num_inference_steps = _parse_int("num_inference_steps", job_input.get("num_inference_steps", 4), minimum=1)
+        num_inference_steps = _parse_int("num_inference_steps", job_input.get("num_inference_steps", 8), minimum=1)  # по умолчанию 8 steps
         strength = _parse_float("strength", job_input.get("strength", 0.8), minimum=0.1)
-
         seed = int(job_input.get("seed", secrets.randbelow(2**32)))
         output_format = str(job_input.get("output_format", "PNG")).upper()
 
-        LOGGER.info("Job %s | steps=%s | strength=%.2f | image=%dx%d", 
+        LOGGER.info("Job %s | steps=%s | strength=%.2f | image=%dx%d",
                     job.get("id"), num_inference_steps, strength, image.width, image.height)
 
         pipe = _load_pipeline()
 
+        # Очистка памяти перед каждой генерацией (помогает избежать OOM)
         torch.cuda.empty_cache()
         torch.cuda.reset_peak_memory_stats()
 
@@ -186,8 +183,8 @@ def generate_image(job: dict[str, Any]) -> dict[str, Any]:
 
 if __name__ == "__main__":
     LOGGER.info("Worker starting with storage root: %s", STORAGE_ROOT)
-    
-    LOGGER.info("Preloading model + LoRA (this may take 5-15 minutes first time)...")
+    LOGGER.info("Preloading model + LoRA (first time may take 5-15 minutes)...")
+
     try:
         _load_pipeline()
         LOGGER.info("Model preloaded successfully and ready for requests.")
