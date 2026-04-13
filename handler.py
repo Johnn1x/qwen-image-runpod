@@ -7,6 +7,7 @@ import secrets
 import time
 from threading import Lock
 from typing import Any
+
 import torch
 from diffusers import QwenImageEditPlusPipeline
 from PIL import Image
@@ -24,6 +25,47 @@ logging.basicConfig(level=logging.INFO)
 pipeline: QwenImageEditPlusPipeline | None = None
 pipeline_lock = Lock()
 
+# ====================== RUNPOD MODEL CACHE ======================
+HF_CACHE_ROOT = "/runpod-volume/huggingface-cache/hub"
+
+# Включаем offline-режим (чтобы ничего не скачивалось из интернета)
+os.environ["HF_HUB_OFFLINE"] = "1"
+os.environ["TRANSFORMERS_OFFLINE"] = "1"
+
+
+def resolve_snapshot_path(model_id: str) -> str:
+    """Официальный поиск модели в RunPod Model Cache"""
+    if "/" not in model_id:
+        raise ValueError(f"MODEL_ID '{model_id}' должен быть в формате 'org/name'")
+
+    org, name = model_id.split("/", 1)
+    model_root = os.path.join(HF_CACHE_ROOT, f"models--{org}--{name}")
+    refs_main = os.path.join(model_root, "refs", "main")
+    snapshots_dir = os.path.join(model_root, "snapshots")
+
+    # Основной путь (самый свежий snapshot)
+    if os.path.isfile(refs_main):
+        with open(refs_main, "r") as f:
+            snapshot_hash = f.read().strip()
+        candidate = os.path.join(snapshots_dir, snapshot_hash)
+        if os.path.isdir(candidate):
+            return candidate
+
+    # Fallback — самый новый snapshot
+    if os.path.isdir(snapshots_dir):
+        versions = [
+            d for d in os.listdir(snapshots_dir)
+            if os.path.isdir(os.path.join(snapshots_dir, d))
+        ]
+        if versions:
+            versions.sort(reverse=True)
+            return os.path.join(snapshots_dir, versions[0])
+
+    raise RuntimeError(
+        f"Модель не найдена в RunPod Model Cache: {model_id}\n"
+        "Убедитесь, что в настройках Endpoint поле 'Model' = Qwen/Qwen-Image-Edit-2511"
+    )
+
 
 def _load_pipeline() -> QwenImageEditPlusPipeline:
     global pipeline
@@ -34,19 +76,20 @@ def _load_pipeline() -> QwenImageEditPlusPipeline:
         if pipeline is not None:
             return pipeline
 
-        LOGGER.info("Loading base pipeline from RunPod Model Cache: %s", DEFAULT_MODEL_ID)
+        LOGGER.info("Загрузка модели из RunPod Model Cache: %s", DEFAULT_MODEL_ID)
+
+        local_model_path = resolve_snapshot_path(DEFAULT_MODEL_ID)
 
         loaded_pipeline = QwenImageEditPlusPipeline.from_pretrained(
-            DEFAULT_MODEL_ID,
+            local_model_path,
             torch_dtype=torch.bfloat16,
-            local_files_only=False,
+            local_files_only=True,      # ← обязательно
             use_safetensors=True,
         )
-
         loaded_pipeline = loaded_pipeline.to("cuda")
         loaded_pipeline.set_progress_bar_config(disable=True)
 
-        LOGGER.info("Loading Lightning LoRA: %s / %s", LORA_REPO, LORA_WEIGHT)
+        LOGGER.info("Загрузка Lightning LoRA: %s / %s", LORA_REPO, LORA_WEIGHT)
         loaded_pipeline.load_lora_weights(
             LORA_REPO,
             weight_name=LORA_WEIGHT,
@@ -58,11 +101,11 @@ def _load_pipeline() -> QwenImageEditPlusPipeline:
             loaded_pipeline.vae.enable_tiling()
 
         pipeline = loaded_pipeline
-        LOGGER.info("Model + LoRA successfully loaded on %s", torch.cuda.get_device_name(0))
+        LOGGER.info("Модель + LoRA успешно загружены на %s", torch.cuda.get_device_name(0))
         return pipeline
 
 
-# ====================== generate_image (без изменений) ======================
+# ====================== generate_image ======================
 def _base64_to_image(b64: str) -> Image.Image:
     if b64.startswith("data:image"):
         b64 = b64.split(",", 1)[1]
@@ -97,7 +140,6 @@ def generate_image(job: dict[str, Any]) -> dict[str, Any]:
     try:
         job_input = job.get("input") or {}
         image_b64 = job_input.get("image")
-
         if not image_b64:
             LOGGER.info("Health check request received. Returning ready status.")
             return {"status": "ready"}
@@ -117,8 +159,8 @@ def generate_image(job: dict[str, Any]) -> dict[str, Any]:
 
         torch.cuda.empty_cache()
         torch.cuda.reset_peak_memory_stats()
-
         start_time = time.perf_counter()
+
         generator = torch.Generator(device="cuda").manual_seed(seed)
 
         with torch.inference_mode():
@@ -144,7 +186,6 @@ def generate_image(job: dict[str, Any]) -> dict[str, Any]:
             "output_format": output_format.lower(),
             "latency_seconds": round(latency_seconds, 2),
         }
-
     except Exception as exc:
         LOGGER.exception("Error in generate_image")
         return {"error": f"Internal error: {str(exc)}"}
@@ -152,7 +193,6 @@ def generate_image(job: dict[str, Any]) -> dict[str, Any]:
 
 if __name__ == "__main__":
     LOGGER.info("Worker starting...")
-
     try:
         LOGGER.info("Pre-loading model + LoRA (RunPod Model Cache mode)...")
         _load_pipeline()
