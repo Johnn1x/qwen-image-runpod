@@ -5,7 +5,7 @@ import logging
 import os
 import secrets
 import time
-from threading import Lock                  # ← Вот эта строка была пропущена
+from threading import Lock
 from typing import Any
 import torch
 from diffusers import QwenImageEditPlusPipeline
@@ -22,7 +22,7 @@ LOGGER.setLevel(logging.INFO)
 logging.basicConfig(level=logging.INFO)
 
 pipeline: QwenImageEditPlusPipeline | None = None
-pipeline_lock = Lock()                      # ← теперь определён
+pipeline_lock = Lock()
 
 
 def _load_pipeline() -> QwenImageEditPlusPipeline:
@@ -39,7 +39,7 @@ def _load_pipeline() -> QwenImageEditPlusPipeline:
         loaded_pipeline = QwenImageEditPlusPipeline.from_pretrained(
             DEFAULT_MODEL_ID,
             torch_dtype=torch.bfloat16,
-            local_files_only=True,      # важно для Model Cache
+            local_files_only=True,
             use_safetensors=True,
         )
 
@@ -62,6 +62,7 @@ def _load_pipeline() -> QwenImageEditPlusPipeline:
         return pipeline
 
 
+# ====================== generate_image (без изменений) ======================
 def _base64_to_image(b64: str) -> Image.Image:
     if b64.startswith("data:image"):
         b64 = b64.split(",", 1)[1]
@@ -151,9 +152,13 @@ def generate_image(job: dict[str, Any]) -> dict[str, Any]:
 
 if __name__ == "__main__":
     LOGGER.info("Worker starting...")
-    LOGGER.info("Pre-loading model + LoRA at worker startup (RunPod Model Cache mode)...")
-    
-    _load_pipeline()                    # ← грузим сразу при старте worker
-    
-    LOGGER.info("Model pre-loaded successfully. Starting Serverless handler.")
+
+    try:
+        LOGGER.info("Pre-loading model + LoRA (RunPod Model Cache mode)...")
+        _load_pipeline()
+        LOGGER.info("Model + LoRA pre-loaded successfully.")
+    except Exception:
+        LOGGER.exception("Preload failed (most likely cache is not ready yet). Worker will continue anyway.")
+
+    LOGGER.info("Starting Serverless handler.")
     runpod.serverless.start({"handler": generate_image})
