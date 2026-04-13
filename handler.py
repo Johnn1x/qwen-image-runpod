@@ -1,6 +1,7 @@
 from __future__ import annotations
 import base64
 import io
+import inspect
 import logging
 import os
 import secrets
@@ -124,24 +125,24 @@ def generate_image(job: dict[str, Any]) -> dict[str, Any]:
         job_input = job.get("input") or {}
         image_b64 = job_input.get("image")
 
-        # Health check от RunPod
         if not image_b64:
             LOGGER.info("Health check request received. Returning ready status.")
             return {"status": "ready"}
 
-        # Основная обработка
         image = _base64_to_image(image_b64)
         prompt = str(job_input.get("prompt", "")).strip()
         negative_prompt = str(job_input.get("negative_prompt", "")).strip()
         width = _parse_dimension("width", job_input.get("width", 1024))
         height = _parse_dimension("height", job_input.get("height", 1024))
         num_inference_steps = _parse_int("num_inference_steps", job_input.get("num_inference_steps", 8), minimum=1)
-        strength = _parse_float("strength", job_input.get("strength", 0.8), minimum=0.1)
+        # strength убрали — пайплайн его не принимает
         seed = int(job_input.get("seed", secrets.randbelow(2**32)))
         output_format = str(job_input.get("output_format", "PNG")).upper()
 
-        LOGGER.info("Job %s | steps=%s | strength=%.2f | size=%dx%d",
-                    job.get("id"), num_inference_steps, strength, width, height)
+        LOGGER.info("Job %s | steps=%s | size=%dx%d", job.get("id"), num_inference_steps, width, height)
+
+        # Для отладки — показываем, какие аргументы реально принимает пайплайн
+        LOGGER.info("Pipe call signature: %s", inspect.signature(QwenImageEditPlusPipeline.__call__))
 
         pipe = _load_pipeline()
 
@@ -159,7 +160,6 @@ def generate_image(job: dict[str, Any]) -> dict[str, Any]:
                 width=width,
                 height=height,
                 num_inference_steps=num_inference_steps,
-                strength=strength,
                 true_cfg_scale=1.0,
                 generator=generator,
                 num_images_per_prompt=1,
