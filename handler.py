@@ -15,7 +15,7 @@ import runpod
 
 # ====================== НАСТРОЙКИ ======================
 DEFAULT_MODEL_ID = os.getenv("QWEN_MODEL_ID", "Qwen/Qwen-Image-Edit-2511")
-LORA_REPO = "lightx2v/Qwen-Image-Edit-2511-Lightning"
+LORA_PATH = "/workspace/lora"
 LORA_WEIGHT = "Qwen-Image-Edit-2511-Lightning-8steps-V1.0-bf16.safetensors"
 
 LOGGER = logging.getLogger("runpod")
@@ -28,13 +28,12 @@ pipeline_lock = Lock()
 # ====================== RUNPOD MODEL CACHE ======================
 HF_CACHE_ROOT = "/runpod-volume/huggingface-cache/hub"
 
-# Включаем offline-режим (чтобы ничего не скачивалось из интернета)
+# Оффлайн-режим только на runtime
 os.environ["HF_HUB_OFFLINE"] = "1"
 os.environ["TRANSFORMERS_OFFLINE"] = "1"
 
 
 def resolve_snapshot_path(model_id: str) -> str:
-    """Официальный поиск модели в RunPod Model Cache"""
     if "/" not in model_id:
         raise ValueError(f"MODEL_ID '{model_id}' должен быть в формате 'org/name'")
 
@@ -43,7 +42,6 @@ def resolve_snapshot_path(model_id: str) -> str:
     refs_main = os.path.join(model_root, "refs", "main")
     snapshots_dir = os.path.join(model_root, "snapshots")
 
-    # Основной путь (самый свежий snapshot)
     if os.path.isfile(refs_main):
         with open(refs_main, "r") as f:
             snapshot_hash = f.read().strip()
@@ -51,19 +49,15 @@ def resolve_snapshot_path(model_id: str) -> str:
         if os.path.isdir(candidate):
             return candidate
 
-    # Fallback — самый новый snapshot
     if os.path.isdir(snapshots_dir):
-        versions = [
-            d for d in os.listdir(snapshots_dir)
-            if os.path.isdir(os.path.join(snapshots_dir, d))
-        ]
+        versions = [d for d in os.listdir(snapshots_dir) if os.path.isdir(os.path.join(snapshots_dir, d))]
         if versions:
             versions.sort(reverse=True)
             return os.path.join(snapshots_dir, versions[0])
 
     raise RuntimeError(
         f"Модель не найдена в RunPod Model Cache: {model_id}\n"
-        "Убедитесь, что в настройках Endpoint поле 'Model' = Qwen/Qwen-Image-Edit-2511"
+        "Проверьте поле 'Model' в настройках Endpoint = Qwen/Qwen-Image-Edit-2511"
     )
 
 
@@ -77,21 +71,20 @@ def _load_pipeline() -> QwenImageEditPlusPipeline:
             return pipeline
 
         LOGGER.info("Загрузка модели из RunPod Model Cache: %s", DEFAULT_MODEL_ID)
-
         local_model_path = resolve_snapshot_path(DEFAULT_MODEL_ID)
 
         loaded_pipeline = QwenImageEditPlusPipeline.from_pretrained(
             local_model_path,
             torch_dtype=torch.bfloat16,
-            local_files_only=True,      # ← обязательно
+            local_files_only=True,
             use_safetensors=True,
         )
         loaded_pipeline = loaded_pipeline.to("cuda")
         loaded_pipeline.set_progress_bar_config(disable=True)
 
-        LOGGER.info("Загрузка Lightning LoRA: %s / %s", LORA_REPO, LORA_WEIGHT)
+        LOGGER.info("Загрузка Lightning LoRA из Docker-образа: %s", LORA_WEIGHT)
         loaded_pipeline.load_lora_weights(
-            LORA_REPO,
+            LORA_PATH,
             weight_name=LORA_WEIGHT,
             adapter_name="lightning"
         )
