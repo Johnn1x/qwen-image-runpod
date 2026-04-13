@@ -6,17 +6,16 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     QWEN_MODEL_ID=Qwen/Qwen-Image-Edit-2511 \
-    HF_HUB_OFFLINE=1 \
-    TRANSFORMERS_OFFLINE=1 \
     PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
     TORCH_CUDA_ARCH_LIST=8.9 \
     RUNPOD_INIT_TIMEOUT=3600
 
-# Обновляем систему и ставим минимум
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates \
-    git \
-    && rm -rf /var/lib/apt/lists/*
+# Скачиваем LoRA один раз при сборке образа
+RUN mkdir -p /workspace/lora && \
+    apt-get update && apt-get install -y --no-install-recommends curl && \
+    curl -L -o /workspace/lora/Qwen-Image-Edit-2511-Lightning-8steps-V1.0-bf16.safetensors \
+    https://huggingface.co/lightx2v/Qwen-Image-Edit-2511-Lightning/resolve/main/Qwen-Image-Edit-2511-Lightning-8steps-V1.0-bf16.safetensors && \
+    apt-get purge -y curl && apt-get autoremove -y && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt /workspace/requirements.txt
 RUN python3 -m pip install --upgrade pip && \
