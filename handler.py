@@ -6,8 +6,6 @@ import logging
 import os
 import secrets
 import time
-from pathlib import Path
-from threading import Lock
 from typing import Any
 import torch
 from diffusers import QwenImageEditPlusPipeline
@@ -19,29 +17,12 @@ DEFAULT_MODEL_ID = os.getenv("QWEN_MODEL_ID", "Qwen/Qwen-Image-Edit-2511")
 LORA_REPO = "lightx2v/Qwen-Image-Edit-2511-Lightning"
 LORA_WEIGHT = "Qwen-Image-Edit-2511-Lightning-8steps-V1.0-bf16.safetensors"
 
-STORAGE_ROOT = Path(os.getenv("MODEL_STORAGE_PATH", "/workspace/model-storage"))
-STORAGE_ROOT.mkdir(parents=True, exist_ok=True)
-
 LOGGER = logging.getLogger("runpod")
 LOGGER.setLevel(logging.INFO)
 logging.basicConfig(level=logging.INFO)
 
 pipeline: QwenImageEditPlusPipeline | None = None
 pipeline_lock = Lock()
-
-
-def _download_model_snapshot(model_id: str) -> Path:
-    from huggingface_hub import snapshot_download
-    model_dir = STORAGE_ROOT / "models" / model_id.replace("/", "--")
-    if not model_dir.exists():
-        LOGGER.info("Downloading model %s...", model_id)
-        snapshot_download(
-            repo_id=model_id,
-            local_dir=str(model_dir),
-            local_dir_use_symlinks=False,
-            resume_download=True,
-        )
-    return model_dir
 
 
 def _load_pipeline() -> QwenImageEditPlusPipeline:
@@ -53,13 +34,11 @@ def _load_pipeline() -> QwenImageEditPlusPipeline:
         if pipeline is not None:
             return pipeline
 
-        model_dir = _download_model_snapshot(DEFAULT_MODEL_ID)
-        LOGGER.info("Loading base pipeline from %s", model_dir)
-
+        LOGGER.info("Loading base pipeline from RunPod Model Cache: %s", DEFAULT_MODEL_ID)
         loaded_pipeline = QwenImageEditPlusPipeline.from_pretrained(
-            str(model_dir),
+            DEFAULT_MODEL_ID,
             torch_dtype=torch.bfloat16,
-            local_files_only=True,
+            local_files_only=True,      # ← важно для Model Cache
             use_safetensors=True,
         )
 
@@ -78,7 +57,7 @@ def _load_pipeline() -> QwenImageEditPlusPipeline:
             loaded_pipeline.vae.enable_tiling()
 
         pipeline = loaded_pipeline
-        LOGGER.info("Model + LoRA loaded on %s", torch.cuda.get_device_name(0))
+        LOGGER.info("Model + LoRA successfully loaded on %s", torch.cuda.get_device_name(0))
         return pipeline
 
 
@@ -112,14 +91,6 @@ def _parse_int(name: str, value: Any, minimum: int = 1) -> int:
         return minimum
 
 
-def _parse_float(name: str, value: Any, minimum: float = 0.0) -> float:
-    try:
-        v = float(value)
-        return max(minimum, v)
-    except Exception:
-        return minimum
-
-
 def generate_image(job: dict[str, Any]) -> dict[str, Any]:
     try:
         job_input = job.get("input") or {}
@@ -135,14 +106,10 @@ def generate_image(job: dict[str, Any]) -> dict[str, Any]:
         width = _parse_dimension("width", job_input.get("width", 1024))
         height = _parse_dimension("height", job_input.get("height", 1024))
         num_inference_steps = _parse_int("num_inference_steps", job_input.get("num_inference_steps", 8), minimum=1)
-        # strength убрали — пайплайн его не принимает
         seed = int(job_input.get("seed", secrets.randbelow(2**32)))
         output_format = str(job_input.get("output_format", "PNG")).upper()
 
         LOGGER.info("Job %s | steps=%s | size=%dx%d", job.get("id"), num_inference_steps, width, height)
-
-        # Для отладки — показываем, какие аргументы реально принимает пайплайн
-        LOGGER.info("Pipe call signature: %s", inspect.signature(QwenImageEditPlusPipeline.__call__))
 
         pipe = _load_pipeline()
 
@@ -182,6 +149,8 @@ def generate_image(job: dict[str, Any]) -> dict[str, Any]:
 
 
 if __name__ == "__main__":
-    LOGGER.info("Worker starting with storage root: %s", STORAGE_ROOT)
-    LOGGER.info("Lazy loading enabled — model will load on first request.")
+    LOGGER.info("Worker starting...")
+    LOGGER.info("Pre-loading model + LoRA at worker startup (RunPod Model Cache)...")
+    _load_pipeline()                                   # ← модель грузится сразу при старте
+    LOGGER.info("Model pre-loaded successfully. Starting Serverless handler.")
     runpod.serverless.start({"handler": generate_image})
