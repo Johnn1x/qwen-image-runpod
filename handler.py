@@ -65,9 +65,6 @@ def _load_pipeline() -> QwenImageEditPlusPipeline:
         loaded_pipeline = loaded_pipeline.to("cuda")
         loaded_pipeline.set_progress_bar_config(disable=True)
 
-        # Убрали enable_model_cpu_offload() — на RTX 6000 Ada 48 ГБ он сильно тормозит
-        # Теперь модель полностью на GPU — скорость вернётся к 10–30 секундам
-
         LOGGER.info("Loading Lightning LoRA: %s / %s", LORA_REPO, LORA_WEIGHT)
         loaded_pipeline.load_lora_weights(
             LORA_REPO,
@@ -126,15 +123,19 @@ def generate_image(job: dict[str, Any]) -> dict[str, Any]:
     try:
         job_input = job.get("input") or {}
         image_b64 = job_input.get("image")
-        if not image_b64:
-            return {"error": "Параметр 'image' (base64) обязателен"}
 
+        # === ОБРАБОТКА ТЕСТОВОГО ЗАПРОСА RUNPOD ===
+        if not image_b64:
+            LOGGER.info("Health check request received (no image). Returning ready status.")
+            return {"status": "ready"}
+
+        # === ОСНОВНАЯ ГЕНЕРАЦИЯ ===
         image = _base64_to_image(image_b64)
         prompt = str(job_input.get("prompt", "")).strip()
         negative_prompt = str(job_input.get("negative_prompt", "")).strip()
         width = _parse_dimension("width", job_input.get("width", 1024))
         height = _parse_dimension("height", job_input.get("height", 1024))
-        num_inference_steps = _parse_int("num_inference_steps", job_input.get("num_inference_steps", 8), minimum=1)  # по умолчанию 8 steps
+        num_inference_steps = _parse_int("num_inference_steps", job_input.get("num_inference_steps", 8), minimum=1)
         strength = _parse_float("strength", job_input.get("strength", 0.8), minimum=0.1)
         seed = int(job_input.get("seed", secrets.randbelow(2**32)))
         output_format = str(job_input.get("output_format", "PNG")).upper()
@@ -144,7 +145,6 @@ def generate_image(job: dict[str, Any]) -> dict[str, Any]:
 
         pipe = _load_pipeline()
 
-        # Очистка памяти перед каждой генерацией (помогает избежать OOM)
         torch.cuda.empty_cache()
         torch.cuda.reset_peak_memory_stats()
 
