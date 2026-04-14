@@ -14,9 +14,9 @@ from PIL import Image
 import runpod
 
 # ====================== НАСТРОЙКИ ======================
-DEFAULT_MODEL_ID = os.getenv("QWEN_MODEL_ID", "Qwen/Qwen-Image-Edit-2511")
+DEFAULT_MODEL_ID = os.getenv("QWEN_MODEL_ID", "qwen/qwen-image-edit-2511")
 LORA_PATH = "/workspace/lora"
-LORA_WEIGHT = "Qwen-Image-Edit-2511-Lightning-8steps-V1.0-bf16.safetensors"
+LORA_WEIGHT = "qwen-image-edit-2511-Lightning-8steps-V1.0-bf16.safetensors"
 
 LOGGER = logging.getLogger("runpod")
 LOGGER.setLevel(logging.INFO)
@@ -35,29 +35,31 @@ os.environ["TRANSFORMERS_OFFLINE"] = "1"
 
 def resolve_snapshot_path(model_id: str) -> str:
     if "/" not in model_id:
-        raise ValueError(f"MODEL_ID '{model_id}' должен быть в формате 'org/name'")
+        raise ValueError(f"Неверный model_id: {model_id}")
 
     org, name = model_id.split("/", 1)
     model_root = os.path.join(HF_CACHE_ROOT, f"models--{org}--{name}")
-    refs_main = os.path.join(model_root, "refs", "main")
     snapshots_dir = os.path.join(model_root, "snapshots")
 
-    if os.path.isfile(refs_main):
-        with open(refs_main, "r") as f:
-            snapshot_hash = f.read().strip()
-        candidate = os.path.join(snapshots_dir, snapshot_hash)
-        if os.path.isdir(candidate):
-            return candidate
-
     if os.path.isdir(snapshots_dir):
-        versions = [d for d in os.listdir(snapshots_dir) if os.path.isdir(os.path.join(snapshots_dir, d))]
+        versions = [d for d in os.listdir(snapshots_dir) 
+                    if os.path.isdir(os.path.join(snapshots_dir, d))]
         if versions:
             versions.sort(reverse=True)
-            return os.path.join(snapshots_dir, versions[0])
+            snapshot_path = os.path.join(snapshots_dir, versions[0])
+            LOGGER.info(f"Модель найдена в кэше: {snapshot_path}")
+            return snapshot_path
+
+    # Диагностика — покажет, что именно не так
+    LOGGER.info("HF cache root exists = %s", os.path.isdir(HF_CACHE_ROOT))
+    LOGGER.info("Model root = %s exists = %s", model_root, os.path.isdir(model_root))
+    LOGGER.info("Snapshots dir = %s exists = %s", snapshots_dir, os.path.isdir(snapshots_dir))
+    LOGGER.info("Looking for model: %s", model_id)
 
     raise RuntimeError(
         f"Модель не найдена в RunPod Model Cache: {model_id}\n"
-        "Проверьте поле 'Model' в настройках Endpoint = Qwen/Qwen-Image-Edit-2511"
+        "Проверьте поле 'Model' в настройках Endpoint.\n"
+        "Должно быть точно: qwen/qwen-image-edit-2511"
     )
 
 
