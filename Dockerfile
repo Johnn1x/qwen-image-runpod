@@ -5,7 +5,7 @@ WORKDIR /workspace
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
-    QWEN_MODEL_ID=Qwen/Qwen-Image-Edit-2511 \
+    QWEN_MODEL_ID=qwen/qwen-image-edit-2511 \
     PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
     TORCH_CUDA_ARCH_LIST=8.9 \
     RUNPOD_INIT_TIMEOUT=3600
