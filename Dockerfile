@@ -9,16 +9,17 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     TRANSFORMERS_OFFLINE=1 \
     PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
-# Создаём папки
+# Сначала устанавливаем все зависимости (включая huggingface_hub)
+COPY requirements.txt /workspace/requirements.txt
+RUN python3 -m pip install --upgrade pip && \
+    python3 -m pip install --no-cache-dir -r /workspace/requirements.txt
+
+# Создаём папки для модели и LoRA
 RUN mkdir -p /models/qwen-image-edit-2511 /workspace/lora
 
 # Скачиваем модель и LoRA
 COPY download_model.py /workspace/download_model.py
 RUN python3 -u /workspace/download_model.py
-
-COPY requirements.txt /workspace/requirements.txt
-RUN python3 -m pip install --upgrade pip && \
-    python3 -m pip install --no-cache-dir -r /workspace/requirements.txt
 
 COPY handler.py /workspace/handler.py
 
