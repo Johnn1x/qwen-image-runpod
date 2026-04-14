@@ -16,7 +16,7 @@ import runpod
 # ====================== НАСТРОЙКИ ======================
 DEFAULT_MODEL_ID = os.getenv("QWEN_MODEL_ID", "qwen/qwen-image-edit-2511")
 LORA_PATH = "/workspace/lora"
-LORA_WEIGHT = "qwen-image-edit-2511-Lightning-8steps-V1.0-bf16.safetensors"
+LORA_WEIGHT = "Qwen-Image-Edit-2511-Lightning-8steps-V1.0-bf16.safetensors"   # ← важно: с большой Q
 
 LOGGER = logging.getLogger("runpod")
 LOGGER.setLevel(logging.INFO)
@@ -28,12 +28,14 @@ pipeline_lock = Lock()
 # ====================== RUNPOD MODEL CACHE ======================
 HF_CACHE_ROOT = "/runpod-volume/huggingface-cache/hub"
 
-# Оффлайн-режим только на runtime
 os.environ["HF_HUB_OFFLINE"] = "1"
 os.environ["TRANSFORMERS_OFFLINE"] = "1"
 
 
 def resolve_snapshot_path(model_id: str) -> str:
+    model_id = model_id.lower().strip()          # ← принудительно lowercase
+    LOGGER.info("Ищем модель в кэше (lowercase): %s", model_id)
+
     if "/" not in model_id:
         raise ValueError(f"Неверный model_id: {model_id}")
 
@@ -41,26 +43,19 @@ def resolve_snapshot_path(model_id: str) -> str:
     model_root = os.path.join(HF_CACHE_ROOT, f"models--{org}--{name}")
     snapshots_dir = os.path.join(model_root, "snapshots")
 
+    LOGGER.info("HF cache root exists = %s", os.path.isdir(HF_CACHE_ROOT))
+    LOGGER.info("Model root exists = %s", os.path.isdir(model_root))
+    LOGGER.info("Snapshots dir exists = %s", os.path.isdir(snapshots_dir))
+
     if os.path.isdir(snapshots_dir):
-        versions = [d for d in os.listdir(snapshots_dir) 
-                    if os.path.isdir(os.path.join(snapshots_dir, d))]
+        versions = [d for d in os.listdir(snapshots_dir) if os.path.isdir(os.path.join(snapshots_dir, d))]
         if versions:
             versions.sort(reverse=True)
             snapshot_path = os.path.join(snapshots_dir, versions[0])
-            LOGGER.info(f"Модель найдена в кэше: {snapshot_path}")
+            LOGGER.info("✅ Модель найдена в кэше: %s", snapshot_path)
             return snapshot_path
 
-    # Диагностика — покажет, что именно не так
-    LOGGER.info("HF cache root exists = %s", os.path.isdir(HF_CACHE_ROOT))
-    LOGGER.info("Model root = %s exists = %s", model_root, os.path.isdir(model_root))
-    LOGGER.info("Snapshots dir = %s exists = %s", snapshots_dir, os.path.isdir(snapshots_dir))
-    LOGGER.info("Looking for model: %s", model_id)
-
-    raise RuntimeError(
-        f"Модель не найдена в RunPod Model Cache: {model_id}\n"
-        "Проверьте поле 'Model' в настройках Endpoint.\n"
-        "Должно быть точно: qwen/qwen-image-edit-2511"
-    )
+    raise RuntimeError(f"Модель не найдена в RunPod Model Cache: {model_id}\nПроверьте поле 'Model' = qwen/qwen-image-edit-2511")
 
 
 def _load_pipeline() -> QwenImageEditPlusPipeline:
@@ -96,95 +91,12 @@ def _load_pipeline() -> QwenImageEditPlusPipeline:
             loaded_pipeline.vae.enable_tiling()
 
         pipeline = loaded_pipeline
-        LOGGER.info("Модель + LoRA успешно загружены на %s", torch.cuda.get_device_name(0))
+        LOGGER.info("✅ Модель + LoRA успешно загружены на %s", torch.cuda.get_device_name(0))
         return pipeline
 
 
-# ====================== generate_image ======================
-def _base64_to_image(b64: str) -> Image.Image:
-    if b64.startswith("data:image"):
-        b64 = b64.split(",", 1)[1]
-    return Image.open(io.BytesIO(base64.b64decode(b64))).convert("RGB")
-
-
-def _image_to_base64(image: Image.Image, fmt: str = "PNG") -> str:
-    buffer = io.BytesIO()
-    image.save(buffer, format=fmt.upper())
-    return base64.b64encode(buffer.getvalue()).decode("utf-8")
-
-
-def _parse_dimension(name: str, value: Any) -> int:
-    try:
-        v = int(value)
-        if v < 64 or v > 2048 or v % 8 != 0:
-            raise ValueError
-        return v
-    except Exception:
-        raise ValueError(f"Неверное значение {name}: {value}")
-
-
-def _parse_int(name: str, value: Any, minimum: int = 1) -> int:
-    try:
-        v = int(value)
-        return max(minimum, v)
-    except Exception:
-        return minimum
-
-
-def generate_image(job: dict[str, Any]) -> dict[str, Any]:
-    try:
-        job_input = job.get("input") or {}
-        image_b64 = job_input.get("image")
-        if not image_b64:
-            LOGGER.info("Health check request received. Returning ready status.")
-            return {"status": "ready"}
-
-        image = _base64_to_image(image_b64)
-        prompt = str(job_input.get("prompt", "")).strip()
-        negative_prompt = str(job_input.get("negative_prompt", "")).strip()
-        width = _parse_dimension("width", job_input.get("width", 1024))
-        height = _parse_dimension("height", job_input.get("height", 1024))
-        num_inference_steps = _parse_int("num_inference_steps", job_input.get("num_inference_steps", 8), minimum=1)
-        seed = int(job_input.get("seed", secrets.randbelow(2**32)))
-        output_format = str(job_input.get("output_format", "PNG")).upper()
-
-        LOGGER.info("Job %s | steps=%s | size=%dx%d", job.get("id"), num_inference_steps, width, height)
-
-        pipe = _load_pipeline()
-
-        torch.cuda.empty_cache()
-        torch.cuda.reset_peak_memory_stats()
-        start_time = time.perf_counter()
-
-        generator = torch.Generator(device="cuda").manual_seed(seed)
-
-        with torch.inference_mode():
-            result = pipe(
-                image=image,
-                prompt=prompt,
-                negative_prompt=negative_prompt or None,
-                width=width,
-                height=height,
-                num_inference_steps=num_inference_steps,
-                true_cfg_scale=1.0,
-                generator=generator,
-                num_images_per_prompt=1,
-            )
-
-        latency_seconds = time.perf_counter() - start_time
-        encoded_image = _image_to_base64(result.images[0], output_format)
-
-        return {
-            "image": encoded_image,
-            "seed": seed,
-            "model_id": DEFAULT_MODEL_ID,
-            "output_format": output_format.lower(),
-            "latency_seconds": round(latency_seconds, 2),
-        }
-    except Exception as exc:
-        LOGGER.exception("Error in generate_image")
-        return {"error": f"Internal error: {str(exc)}"}
-
+# ====================== generate_image (остальное без изменений) ======================
+# ... (весь остальной код generate_image, _base64_to_image и т.д. оставь как у тебя сейчас)
 
 if __name__ == "__main__":
     LOGGER.info("Worker starting...")
