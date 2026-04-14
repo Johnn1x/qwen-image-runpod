@@ -5,17 +5,26 @@ WORKDIR /workspace
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
-    QWEN_MODEL_ID=qwen/qwen-image-edit-2511 \
-    PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
-    TORCH_CUDA_ARCH_LIST=8.9 \
-    RUNPOD_INIT_TIMEOUT=3600
+    HF_HUB_OFFLINE=1 \
+    TRANSFORMERS_OFFLINE=1 \
+    PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
-# Скачиваем LoRA один раз при сборке образа
-RUN mkdir -p /workspace/lora && \
-    apt-get update && apt-get install -y --no-install-recommends curl && \
+# Запекаем модель + LoRA один раз при сборке
+RUN mkdir -p /models/qwen-image-edit-2511 /workspace/lora && \
+    python -c '
+from huggingface_hub import snapshot_download
+print("Скачиваем Qwen/Qwen-Image-Edit-2511...")
+snapshot_download(
+    repo_id="Qwen/Qwen-Image-Edit-2511",
+    local_dir="/models/qwen-image-edit-2511",
+    local_dir_use_symlinks=False,
+    resume_download=True,
+    allow_patterns=["*.safetensors", "*.json", "*.txt", "model_index.json"]
+)
+print("Модель скачана.")
+' && \
     curl -L -o /workspace/lora/Qwen-Image-Edit-2511-Lightning-8steps-V1.0-bf16.safetensors \
-    https://huggingface.co/lightx2v/Qwen-Image-Edit-2511-Lightning/resolve/main/Qwen-Image-Edit-2511-Lightning-8steps-V1.0-bf16.safetensors && \
-    apt-get purge -y curl && apt-get autoremove -y && rm -rf /var/lib/apt/lists/*
+    https://huggingface.co/lightx2v/Qwen-Image-Edit-2511-Lightning/resolve/main/Qwen-Image-Edit-2511-Lightning-8steps-V1.0-bf16.safetensors
 
 COPY requirements.txt /workspace/requirements.txt
 RUN python3 -m pip install --upgrade pip && \
