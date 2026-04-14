@@ -9,11 +9,12 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     TRANSFORMERS_OFFLINE=1 \
     PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
-# Скачиваем модель и LoRA
+# Создаём папки
 RUN mkdir -p /models/qwen-image-edit-2511 /workspace/lora
 
+# Скачиваем модель и LoRA
 COPY download_model.py /workspace/download_model.py
-RUN python3 /workspace/download_model.py
+RUN python3 -u /workspace/download_model.py
 
 COPY requirements.txt /workspace/requirements.txt
 RUN python3 -m pip install --upgrade pip && \
