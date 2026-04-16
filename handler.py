@@ -40,7 +40,7 @@ def _load_pipeline() -> QwenImageEditPlusPipeline:
 
         pipe = QwenImageEditPlusPipeline.from_pretrained(
             MODEL_ID,
-            torch_dtype=torch.bfloat16,
+            torch_dtype=torch.float16,        # ← изменили с bfloat16 на float16
             use_safetensors=True,
             token=os.getenv("HF_TOKEN"),
         )
@@ -62,7 +62,7 @@ def _load_pipeline() -> QwenImageEditPlusPipeline:
         pipeline = pipe
         LOGGER.info("✅ Модель + LoRA загружены")
         return pipeline
-
+        
 
 def _base64_to_image(b64: str) -> Image.Image:
     if b64.startswith("data:image"):
