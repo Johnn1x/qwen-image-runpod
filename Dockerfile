@@ -7,7 +7,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
     PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
-# Только LoRA (маленькая)
+# Только LoRA
 RUN mkdir -p /workspace/lora && \
     apt-get update && apt-get install -y --no-install-recommends curl && \
     curl -L -o /workspace/lora/Qwen-Image-Edit-2511-Lightning-8steps-V1.0-bf16.safetensors \
