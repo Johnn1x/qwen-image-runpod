@@ -11,11 +11,12 @@ from typing import Any
 import torch
 from diffusers import QwenImageEditPlusPipeline
 from PIL import Image
+from huggingface_hub import hf_hub_download
 import runpod
 
 # ====================== НАСТРОЙКИ ======================
-MODEL_PATH = "/models/qwen-image-edit-2511"
-LORA_PATH = "/workspace/lora"
+MODEL_ID = os.getenv("QWEN_MODEL_ID", "qwen/qwen-image-edit-2511")
+LORA_REPO = "lightx2v/Qwen-Image-Edit-2511-Lightning"
 LORA_WEIGHT = "Qwen-Image-Edit-2511-Lightning-8steps-V1.0-bf16.safetensors"
 
 LOGGER = logging.getLogger("runpod")
@@ -24,9 +25,6 @@ logging.basicConfig(level=logging.INFO)
 
 pipeline: QwenImageEditPlusPipeline | None = None
 pipeline_lock = Lock()
-
-os.environ["HF_HUB_OFFLINE"] = "1"
-os.environ["TRANSFORMERS_OFFLINE"] = "1"
 
 
 def _load_pipeline() -> QwenImageEditPlusPipeline:
@@ -38,37 +36,35 @@ def _load_pipeline() -> QwenImageEditPlusPipeline:
         if pipeline is not None:
             return pipeline
 
-        start = time.perf_counter()
-        LOGGER.info("Загрузка модели + LoRA (lazy)...")
+        LOGGER.info("Загрузка модели из RunPod Cached Models: %s", MODEL_ID)
 
-        lora_file = os.path.join(LORA_PATH, LORA_WEIGHT)
-        if not os.path.isfile(lora_file):
-            raise RuntimeError(f"LoRA не найдена: {lora_file}")
-
-        loaded_pipeline = QwenImageEditPlusPipeline.from_pretrained(
-            MODEL_PATH,
+        pipe = QwenImageEditPlusPipeline.from_pretrained(
+            MODEL_ID,
             torch_dtype=torch.bfloat16,
-            local_files_only=True,
             use_safetensors=True,
+            token=os.getenv("HF_TOKEN"),
         )
-        loaded_pipeline = loaded_pipeline.to("cuda")
-        loaded_pipeline.set_progress_bar_config(disable=True)
+        pipe = pipe.to("cuda")
+        pipe.set_progress_bar_config(disable=True)
 
-        loaded_pipeline.load_lora_weights(
-            LORA_PATH,
-            weight_name=LORA_WEIGHT,
-            adapter_name="lightning"
+        LOGGER.info("Загрузка LoRA...")
+        lora_path = hf_hub_download(
+            repo_id=LORA_REPO,
+            filename=LORA_WEIGHT,
+            token=os.getenv("HF_TOKEN")
         )
-        loaded_pipeline.set_adapters(["lightning"], adapter_weights=[1.0])
+        pipe.load_lora_weights(lora_path, adapter_name="lightning")
+        pipe.set_adapters(["lightning"], adapter_weights=[1.0])
 
-        if getattr(loaded_pipeline, "vae", None) is not None:
-            loaded_pipeline.vae.enable_tiling()
+        if getattr(pipe, "vae", None) is not None:
+            pipe.vae.enable_tiling()
 
-        pipeline = loaded_pipeline
-        LOGGER.info(f"✅ Модель + LoRA загружены за {time.perf_counter() - start:.1f} сек")
+        pipeline = pipe
+        LOGGER.info("✅ Модель + LoRA загружены")
         return pipeline
 
 
+# ====================== generate_image ======================
 def _base64_to_image(b64: str) -> Image.Image:
     if b64.startswith("data:image"):
         b64 = b64.split(",", 1)[1]
@@ -118,7 +114,7 @@ def generate_image(job: dict[str, Any]) -> dict[str, Any]:
 
         LOGGER.info("Job %s | steps=%s | size=%dx%d", job.get("id"), num_inference_steps, width, height)
 
-        pipe = _load_pipeline()   # ← модель грузится ТОЛЬКО здесь
+        pipe = _load_pipeline()
 
         torch.cuda.empty_cache()
         torch.cuda.reset_peak_memory_stats()
@@ -145,16 +141,5 @@ def generate_image(job: dict[str, Any]) -> dict[str, Any]:
         return {
             "image": encoded_image,
             "seed": seed,
-            "model_id": "qwen/qwen-image-edit-2511",
-            "output_format": output_format.lower(),
-            "latency_seconds": round(latency_seconds, 2),
-        }
-    except Exception as exc:
-        LOGGER.exception("Error in generate_image")
-        return {"error": f"Internal error: {str(exc)}"}
-
-
-if __name__ == "__main__":
-    LOGGER.info("Worker starting... (lazy loading enabled)")
-    LOGGER.info("Starting Serverless handler.")
-    runpod.serverless.start({"handler": generate_image})
+            "model_id": MODEL_ID,
+            "output_format": output
