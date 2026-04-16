@@ -64,7 +64,6 @@ def _load_pipeline() -> QwenImageEditPlusPipeline:
         return pipeline
 
 
-# ====================== generate_image ======================
 def _base64_to_image(b64: str) -> Image.Image:
     if b64.startswith("data:image"):
         b64 = b64.split(",", 1)[1]
@@ -142,4 +141,15 @@ def generate_image(job: dict[str, Any]) -> dict[str, Any]:
             "image": encoded_image,
             "seed": seed,
             "model_id": MODEL_ID,
-            "output_format": output
+            "output_format": output_format.lower(),
+            "latency_seconds": round(latency_seconds, 2),
+        }
+    except Exception as exc:
+        LOGGER.exception("Error in generate_image")
+        return {"error": f"Internal error: {str(exc)}"}
+
+
+if __name__ == "__main__":
+    LOGGER.info("Worker starting... (RunPod Cached Models + lazy loading)")
+    LOGGER.info("Starting Serverless handler.")
+    runpod.serverless.start({"handler": generate_image})
