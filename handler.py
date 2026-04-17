@@ -43,10 +43,11 @@ def _load_pipeline():
             torch_dtype=torch.float16,
             use_safetensors=True,
             token=os.getenv("HF_TOKEN"),
-            low_cpu_mem_usage=True,          # ← КРИТИЧНО для RAM
+            low_cpu_mem_usage=True,           # экономия RAM
         )
 
-        pipe.enable_attention_slicing()      # экономим VRAM
+        pipe.enable_attention_slicing()
+        pipe.enable_sequential_cpu_offload()  # ← главное изменение (снижает пик RAM)
 
         pipe = pipe.to("cuda")
         pipe.set_progress_bar_config(disable=True)
@@ -70,7 +71,7 @@ def _load_pipeline():
 def _base64_to_image(b64: str):
     if b64.startswith("data:image"):
         b64 = b64.split(",", 1)[1]
-    from PIL import Image                                      # ← ленивый импорт
+    from PIL import Image
     return Image.open(io.BytesIO(base64.b64decode(b64))).convert("RGB")
 
 
@@ -119,7 +120,7 @@ def generate_image(job: dict[str, Any]) -> dict[str, Any]:
 
         pipe = _load_pipeline()
 
-        import torch                                      # ← ленивый импорт torch
+        import torch
         torch.cuda.empty_cache()
         torch.cuda.reset_peak_memory_stats()
         start_time = time.perf_counter()
@@ -155,6 +156,6 @@ def generate_image(job: dict[str, Any]) -> dict[str, Any]:
 
 
 if __name__ == "__main__":
-    LOGGER.info("Worker starting... (low RAM mode + lazy imports)")
+    LOGGER.info("Worker starting... (low RAM mode + sequential offload)")
     LOGGER.info("Starting Serverless handler.")
     runpod.serverless.start({"handler": generate_image})
