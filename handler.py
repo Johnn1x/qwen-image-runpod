@@ -36,24 +36,28 @@ def _load_pipeline() -> QwenImageEditPlusPipeline:
         if pipeline is not None:
             return pipeline
 
-        LOGGER.info("Загрузка модели из RunPod Cached Models: %s", MODEL_ID)
+        LOGGER.info("Загрузка модели: %s", MODEL_ID)
 
         pipe = QwenImageEditPlusPipeline.from_pretrained(
             MODEL_ID,
-            torch_dtype=torch.float16,        # ← изменили с bfloat16 на float16
+            torch_dtype=torch.float16,
             use_safetensors=True,
             token=os.getenv("HF_TOKEN"),
+            low_cpu_mem_usage=True,
         )
+
+        pipe.enable_attention_slicing()
+        # pipe.enable_vae_slicing()  # включи, если всё ещё OOM
+
         pipe = pipe.to("cuda")
         pipe.set_progress_bar_config(disable=True)
 
-        LOGGER.info("Загрузка LoRA...")
-        lora_path = hf_hub_download(
-            repo_id=LORA_REPO,
-            filename=LORA_WEIGHT,
-            token=os.getenv("HF_TOKEN")
+        LOGGER.info("Загрузка LoRA (local)...")
+        pipe.load_lora_weights(
+            "/workspace/lora",
+            weight_name=LORA_WEIGHT,
+            adapter_name="lightning",
         )
-        pipe.load_lora_weights(lora_path, adapter_name="lightning")
         pipe.set_adapters(["lightning"], adapter_weights=[1.0])
 
         if getattr(pipe, "vae", None) is not None:
@@ -62,6 +66,7 @@ def _load_pipeline() -> QwenImageEditPlusPipeline:
         pipeline = pipe
         LOGGER.info("✅ Модель + LoRA загружены")
         return pipeline
+
         
 
 def _base64_to_image(b64: str) -> Image.Image:
