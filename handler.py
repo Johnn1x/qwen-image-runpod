@@ -8,9 +8,6 @@ import time
 from threading import Lock
 from typing import Any
 
-import torch
-from diffusers import QwenImageEditPlusPipeline
-from PIL import Image
 import runpod
 
 # ====================== НАСТРОЙКИ ======================
@@ -22,11 +19,11 @@ LOGGER = logging.getLogger("runpod")
 LOGGER.setLevel(logging.INFO)
 logging.basicConfig(level=logging.INFO)
 
-pipeline: QwenImageEditPlusPipeline | None = None
+pipeline = None
 pipeline_lock = Lock()
 
 
-def _load_pipeline() -> QwenImageEditPlusPipeline:
+def _load_pipeline():
     global pipeline
     if pipeline is not None:
         return pipeline
@@ -37,16 +34,19 @@ def _load_pipeline() -> QwenImageEditPlusPipeline:
 
         LOGGER.info("Загрузка модели из RunPod Cached Models: %s", MODEL_ID)
 
+        # Тяжёлые импорты только здесь
+        from diffusers import QwenImageEditPlusPipeline
+        import torch
+
         pipe = QwenImageEditPlusPipeline.from_pretrained(
             MODEL_ID,
-            torch_dtype=torch.float16,          # экономим память
+            torch_dtype=torch.float16,
             use_safetensors=True,
             token=os.getenv("HF_TOKEN"),
-            low_cpu_mem_usage=True,             # ← КРИТИЧНО для RAM
+            low_cpu_mem_usage=True,          # ← КРИТИЧНО для RAM
         )
 
-        pipe.enable_attention_slicing()         # экономим VRAM
-        # pipe.enable_vae_slicing()             # раскомментируй, если всё ещё OOM
+        pipe.enable_attention_slicing()      # экономим VRAM
 
         pipe = pipe.to("cuda")
         pipe.set_progress_bar_config(disable=True)
@@ -67,14 +67,14 @@ def _load_pipeline() -> QwenImageEditPlusPipeline:
         return pipeline
 
 
-# ====================== generate_image ======================
-def _base64_to_image(b64: str) -> Image.Image:
+def _base64_to_image(b64: str):
     if b64.startswith("data:image"):
         b64 = b64.split(",", 1)[1]
+    from PIL import Image                                      # ← ленивый импорт
     return Image.open(io.BytesIO(base64.b64decode(b64))).convert("RGB")
 
 
-def _image_to_base64(image: Image.Image, fmt: str = "PNG") -> str:
+def _image_to_base64(image, fmt: str = "PNG") -> str:
     buffer = io.BytesIO()
     image.save(buffer, format=fmt.upper())
     return base64.b64encode(buffer.getvalue()).decode("utf-8")
@@ -119,6 +119,7 @@ def generate_image(job: dict[str, Any]) -> dict[str, Any]:
 
         pipe = _load_pipeline()
 
+        import torch                                      # ← ленивый импорт torch
         torch.cuda.empty_cache()
         torch.cuda.reset_peak_memory_stats()
         start_time = time.perf_counter()
@@ -154,6 +155,6 @@ def generate_image(job: dict[str, Any]) -> dict[str, Any]:
 
 
 if __name__ == "__main__":
-    LOGGER.info("Worker starting... (RunPod Cached Models + lazy loading)")
+    LOGGER.info("Worker starting... (low RAM mode + lazy imports)")
     LOGGER.info("Starting Serverless handler.")
     runpod.serverless.start({"handler": generate_image})
