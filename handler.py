@@ -11,12 +11,11 @@ from typing import Any
 import torch
 from diffusers import QwenImageEditPlusPipeline
 from PIL import Image
-from huggingface_hub import hf_hub_download
 import runpod
 
 # ====================== НАСТРОЙКИ ======================
 MODEL_ID = os.getenv("QWEN_MODEL_ID", "qwen/qwen-image-edit-2511")
-LORA_REPO = "lightx2v/Qwen-Image-Edit-2511-Lightning"
+LORA_PATH = "/workspace/lora"
 LORA_WEIGHT = "Qwen-Image-Edit-2511-Lightning-8steps-V1.0-bf16.safetensors"
 
 LOGGER = logging.getLogger("runpod")
@@ -36,27 +35,27 @@ def _load_pipeline() -> QwenImageEditPlusPipeline:
         if pipeline is not None:
             return pipeline
 
-        LOGGER.info("Загрузка модели: %s", MODEL_ID)
+        LOGGER.info("Загрузка модели из RunPod Cached Models: %s", MODEL_ID)
 
         pipe = QwenImageEditPlusPipeline.from_pretrained(
             MODEL_ID,
-            torch_dtype=torch.float16,
+            torch_dtype=torch.float16,          # экономим память
             use_safetensors=True,
             token=os.getenv("HF_TOKEN"),
-            low_cpu_mem_usage=True,
+            low_cpu_mem_usage=True,             # ← КРИТИЧНО для RAM
         )
 
-        pipe.enable_attention_slicing()
-        # pipe.enable_vae_slicing()  # включи, если всё ещё OOM
+        pipe.enable_attention_slicing()         # экономим VRAM
+        # pipe.enable_vae_slicing()             # раскомментируй, если всё ещё OOM
 
         pipe = pipe.to("cuda")
         pipe.set_progress_bar_config(disable=True)
 
-        LOGGER.info("Загрузка LoRA (local)...")
+        LOGGER.info("Загрузка LoRA из Docker-образа...")
         pipe.load_lora_weights(
-            "/workspace/lora",
+            LORA_PATH,
             weight_name=LORA_WEIGHT,
-            adapter_name="lightning",
+            adapter_name="lightning"
         )
         pipe.set_adapters(["lightning"], adapter_weights=[1.0])
 
@@ -64,11 +63,11 @@ def _load_pipeline() -> QwenImageEditPlusPipeline:
             pipe.vae.enable_tiling()
 
         pipeline = pipe
-        LOGGER.info("✅ Модель + LoRA загружены")
+        LOGGER.info("✅ Модель + LoRA успешно загружены")
         return pipeline
 
-        
 
+# ====================== generate_image ======================
 def _base64_to_image(b64: str) -> Image.Image:
     if b64.startswith("data:image"):
         b64 = b64.split(",", 1)[1]
