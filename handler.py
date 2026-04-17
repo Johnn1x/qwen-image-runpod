@@ -34,7 +34,6 @@ def _load_pipeline():
 
         LOGGER.info("Загрузка модели из RunPod Cached Models: %s", MODEL_ID)
 
-        # Тяжёлые импорты только здесь
         from diffusers import QwenImageEditPlusPipeline
         import torch
 
@@ -43,11 +42,13 @@ def _load_pipeline():
             torch_dtype=torch.float16,
             use_safetensors=True,
             token=os.getenv("HF_TOKEN"),
-            low_cpu_mem_usage=True,           # экономия RAM
+            low_cpu_mem_usage=True,          # ← обязательно для RAM
         )
 
-        pipe.enable_attention_slicing()
-        pipe.enable_sequential_cpu_offload()  # ← главное изменение (снижает пик RAM)
+        pipe.enable_attention_slicing()      # экономим VRAM
+
+        # УБРАЛИ sequential offload — он конфликтует с to("cuda")
+        # pipe.enable_sequential_cpu_offload()  # ← НЕ использовать вместе с to("cuda")
 
         pipe = pipe.to("cuda")
         pipe.set_progress_bar_config(disable=True)
@@ -66,6 +67,7 @@ def _load_pipeline():
         pipeline = pipe
         LOGGER.info("✅ Модель + LoRA успешно загружены")
         return pipeline
+
 
 
 def _base64_to_image(b64: str):
